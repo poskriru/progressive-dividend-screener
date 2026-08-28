@@ -207,17 +207,40 @@ METRIC_DEFINITIONS = {
             "ProfitLossAttributableToOwnersOfParentSummaryOfBusinessResults",
             "ProfitLossAttributableToOwnersOfParentIFRS",
             "ProfitLossAttributableToOwnersOfParentIFRSSummaryOfBusinessResults",
+            "NetIncome",
+            "NetIncomeLoss",
+            "NetIncomeLossSummaryOfBusinessResults",
         ],
         "labels": [
             "当期純利益",
             "当期純損失",
             "当期純利益又は当期純損失",
+            "当期純利益又は当期純損失（△）",
             "親会社株主に帰属する当期純利益",
             "親会社株主に帰属する当期純損失",
             "親会社株主に帰属する当期純利益又は親会社株主に帰属する当期純損失",
+            "親会社株主に帰属する当期純利益又は親会社株主に帰属する当期純損失（△）",
             "親会社の所有者に帰属する当期利益",
             "親会社の所有者に帰属する当期損失",
             "親会社の所有者に帰属する当期利益（△損失）",
+        ],
+        "required_label_patterns": [
+            "当期純利益",
+            "当期純損失",
+            "親会社株主に帰属する当期純利益",
+            "親会社株主に帰属する当期純損失",
+            "親会社の所有者に帰属する当期利益",
+            "親会社の所有者に帰属する当期損失",
+        ],
+        "excluded_label_patterns": [
+            "1株当たり",
+            "１株当たり",
+            "潜在株式調整後",
+            "希薄化後",
+            "包括利益",
+            "四半期",
+            "中間期",
+            "セグメント",
         ],
         "kind": "money",
         "prefer_consolidated": True,
@@ -332,12 +355,26 @@ METRIC_DEFINITIONS = {
             "１株当たり当期純損失",
             "1株当たり当期純利益又は1株当たり当期純損失",
             "１株当たり当期純利益又は１株当たり当期純損失",
-            "1株当たり当期純利益又は当期純損失",
-            "１株当たり当期純利益又は当期純損失",
+            "1株当たり当期純利益又は1株当たり当期純損失（△）",
+            "１株当たり当期純利益又は１株当たり当期純損失（△）",
             "基本的1株当たり当期利益",
             "基本的１株当たり当期利益",
             "基本的1株当たり当期利益（△損失）",
             "基本的１株当たり当期利益（△損失）",
+        ],
+        "required_label_patterns": [
+            "1株当たり当期純利益",
+            "１株当たり当期純利益",
+            "1株当たり当期純損失",
+            "１株当たり当期純損失",
+            "基本的1株当たり当期利益",
+            "基本的１株当たり当期利益",
+        ],
+        "excluded_label_patterns": [
+            "潜在株式調整後",
+            "希薄化後",
+            "四半期",
+            "中間期",
         ],
         "kind": "number",
         "expected_unit": "per_share",
@@ -1165,6 +1202,26 @@ def score_fact(
     else:
         if consolidated_type == "個別":
             score += 15
+            
+    # ========================================================
+    # CurrentYearの年次経営指標を優先
+    # ========================================================
+
+    if "CurrentYearDuration" in context_id:
+        score += 80
+
+    if "CurrentYearInstant" in context_id:
+        score += 80
+
+    if "SummaryOfBusinessResults" in element_suffix:
+        score += 70
+
+    # 四半期・中間期は年次実績として採用しない
+    if "Quarter" in context_id:
+        score -= 300
+
+    if "Interim" in context_id:
+        score -= 300
 
     return score
 
@@ -1213,9 +1270,13 @@ def fact_matches_definition(
     definition: dict[str, Any],
 ) -> bool:
     """
-    要素IDまたは項目名が対象財務項目に一致するか判定する。
+    次のいずれかで財務項目を識別する。
 
-    相対年度・コンテキストだけでは一致としない。
+    1. 標準要素IDの完全一致
+    2. 項目名の完全一致
+    3. 項目別の必須語を含み、除外語を含まない
+
+    コンテキストや相対年度だけでは一致としない。
     """
     element_id = get_fact_value(
         fact,
@@ -1259,7 +1320,43 @@ def fact_matches_definition(
         return True
 
     # ========================================================
-    # EDINETの定型的な補足文字だけを許可
+    # 項目別の除外語を確認
+    # ========================================================
+
+    excluded_patterns = [
+        normalize_matching_text(pattern)
+        for pattern in definition.get(
+            "excluded_label_patterns",
+            [],
+        )
+    ]
+
+    if any(
+        pattern in normalized_label
+        for pattern in excluded_patterns
+    ):
+        return False
+
+    # ========================================================
+    # 項目別の必須語を確認
+    # ========================================================
+
+    required_patterns = [
+        normalize_matching_text(pattern)
+        for pattern in definition.get(
+            "required_label_patterns",
+            [],
+        )
+    ]
+
+    if required_patterns:
+        return any(
+            pattern in normalized_label
+            for pattern in required_patterns
+        )
+
+    # ========================================================
+    # EDINETの定型的な補足文字
     # ========================================================
 
     allowed_suffixes = [
@@ -1271,12 +1368,15 @@ def fact_matches_definition(
 
     for candidate in normalized_candidate_labels:
         for allowed_suffix in allowed_suffixes:
-            if normalized_label == candidate + normalize_matching_text(
+            normalized_suffix = normalize_matching_text(
                 allowed_suffix
-            ):
+            )
+
+            if normalized_label == candidate + normalized_suffix:
                 return True
 
     return False
+
 
 
 
