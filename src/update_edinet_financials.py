@@ -3656,6 +3656,51 @@ def main() -> None:
                 accounting_standard,
             )
 
+            # =================================================
+            # 最終的に選択された財務項目を確認
+            # =================================================
+
+            if doc_id in {
+                "S100YYKB",  # 523A セイワホールディングス
+                "S100YYQX",  # 277A グロービング
+                "S100YTII",  # 4088 エア・ウォーター
+            }:
+                for selected_metric_name in [
+                    "net_income",
+                    "net_assets",
+                    "equity",
+                ]:
+                    selected_metric = metrics.get(
+                        selected_metric_name
+                    )
+
+                    if selected_metric is None:
+                        print(
+                            f"{doc_id}: "
+                            f"最終選択なし "
+                            f"metric={selected_metric_name}"
+                        )
+                        continue
+
+                    print(
+                        f"{doc_id}: "
+                        f"最終選択 "
+                        f"metric={selected_metric_name} | "
+                        f"value={selected_metric.get('value')} | "
+                        f"element_id="
+                        f"{selected_metric.get('element_id')} | "
+                        f"context_id="
+                        f"{selected_metric.get('context_id')} | "
+                        f"accounting_scope="
+                        f"{selected_metric.get('accounting_scope')} | "
+                        f"scope="
+                        f"{selected_metric.get('scope')} | "
+                        f"score="
+                        f"{selected_metric.get('score')} | "
+                        f"source_file="
+                        f"{selected_metric.get('source_file')}"
+                    )
+
             metadata_metric_names = {
                 "accounting_standard",
                 "period_start",
