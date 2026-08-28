@@ -1493,6 +1493,29 @@ def main() -> None:
         service_account_json
     )
 
+    # ========================================================
+    # 初回実行用シート作成
+    #
+    # 初回実行時には「EDINET財務」と「株式指標」が存在しないため、
+    # 読み込み処理より先に作成する。
+    # ========================================================
+
+    get_or_create_sheet(
+        service,
+        spreadsheet_id,
+        FINANCIAL_SHEET_NAME,
+    )
+
+    get_or_create_sheet(
+        service,
+        spreadsheet_id,
+        INDICATOR_SHEET_NAME,
+    )
+
+    # ========================================================
+    # 既存EDINET財務データの読み込み
+    # ========================================================
+
     existing_financial_values = read_sheet(
         service,
         spreadsheet_id,
@@ -1717,6 +1740,7 @@ def main() -> None:
         f"失敗={failure_count}, "
         f"株式指標={len(indicator_rows)}"
     )
+
 
 
 if __name__ == "__main__":
