@@ -416,12 +416,26 @@ METRIC_DEFINITIONS = {
     "shares_issued": {
         "element_ids": [
             "NumberOfIssuedSharesAsOfFiscalYearEndIssuedSharesTotalNumberOfSharesEtc",
+            "TotalNumberOfIssuedSharesSummaryOfBusinessResults",
             "TotalNumberOfIssuedShares",
             "NumberOfIssuedShares",
         ],
         "labels": [
             "発行済株式総数",
             "期末発行済株式数",
+            "事業年度末現在発行数",
+            "発行済株式数",
+        ],
+        "required_label_patterns": [
+            "発行済株式総数",
+            "期末発行済株式数",
+            "事業年度末現在発行数",
+        ],
+        "excluded_label_patterns": [
+            "提出日現在",
+            "潜在株式",
+            "自己株式",
+            "新株予約権",
         ],
         "kind": "number",
         "expected_unit": "shares",
@@ -1507,6 +1521,184 @@ def fact_value_is_reasonable(
 
     return True
 
+# ============================================================
+# 連結・個別の判定
+# ============================================================
+
+def parse_boolean_value(value: Any) -> bool | None:
+    text = normalize_text(value).lower()
+
+    if text in {
+        "true",
+        "1",
+        "yes",
+        "有",
+        "あり",
+    }:
+        return True
+
+    if text in {
+        "false",
+        "0",
+        "no",
+        "無",
+        "なし",
+    }:
+        return False
+
+    return None
+
+
+def detect_consolidated_report(
+    facts: list[dict[str, str]],
+) -> bool | None:
+    """
+    EDINETのDEI情報から、その書類に連結財務諸表が
+   含まれるかを判定する。
+
+    True:
+        連結財務諸表あり
+
+    False:
+        非連結・個別のみ
+
+    None:
+        判定不能
+    """
+    target_element_ids = {
+        "WhetherConsolidatedFinancialStatementsArePreparedDEI",
+    }
+
+    target_labels = {
+        normalize_matching_text("連結決算の有無、DEI"),
+        normalize_matching_text("連結決算の有無"),
+    }
+
+    for fact in facts:
+        element_id = get_fact_value(
+            fact,
+            [
+                "要素ID",
+                "element_id",
+                "Element ID",
+            ],
+        )
+
+        element_suffix = element_id.split(":")[-1]
+
+        label = normalize_matching_text(
+            get_fact_value(
+                fact,
+                [
+                    "項目名",
+                    "ラベル",
+                    "item_name",
+                ],
+            )
+        )
+
+        if (
+            element_suffix not in target_element_ids
+            and label not in target_labels
+        ):
+            continue
+
+        value = get_fact_value(
+            fact,
+            [
+                "値",
+                "value",
+                "Value",
+            ],
+        )
+
+        parsed_value = parse_boolean_value(value)
+
+        if parsed_value is not None:
+            return parsed_value
+
+    return None
+
+
+def get_fact_consolidation_scope(
+    fact: dict[str, str],
+) -> str:
+    """
+    各ファクトの連結・個別スコープを判定する。
+
+    戻り値:
+        consolidated
+        non_consolidated
+        unknown
+    """
+    context_id = get_fact_value(
+        fact,
+        [
+            "コンテキストID",
+            "context_id",
+        ],
+    )
+
+    consolidated_type = normalize_matching_text(
+        get_fact_value(
+            fact,
+            [
+                "連結・個別",
+                "連結個別",
+                "consolidated_or_nonconsolidated",
+            ],
+        )
+    )
+
+    # NonConsolidatedMemberにはConsolidatedMemberという
+    # 文字列も含まれるため、先に個別を判定する。
+    if (
+        "NonConsolidatedMember" in context_id
+        or consolidated_type in {
+            "個別",
+            "非連結",
+        }
+    ):
+        return "non_consolidated"
+
+    if (
+        "ConsolidatedMember" in context_id
+        or consolidated_type == "連結"
+    ):
+        return "consolidated"
+
+    return "unknown"
+
+
+def fact_matches_report_scope(
+    fact: dict[str, str],
+    definition: dict[str, Any],
+    is_consolidated_report: bool | None,
+) -> bool:
+    """
+    連結決算企業では個別財務数値を除外し、
+    非連結企業では連結財務数値を除外する。
+
+    配当・発行済株式数など、prefer_consolidated=Falseの
+    項目は提出会社情報としてこの判定を適用しない。
+    """
+    if not definition.get("prefer_consolidated"):
+        return True
+
+    if is_consolidated_report is None:
+        return True
+
+    scope = get_fact_consolidation_scope(fact)
+
+    if is_consolidated_report:
+        return scope != "non_consolidated"
+
+    return scope != "consolidated"
+
+
+# ============================================================
+# 財務項目の抽出
+# ============================================================
 
 # ============================================================
 # 財務項目の抽出
@@ -1515,6 +1707,7 @@ def fact_value_is_reasonable(
 def extract_metric(
     facts: list[dict[str, str]],
     definition: dict[str, Any],
+    is_consolidated_report: bool | None,
 ) -> dict[str, Any] | None:
     candidates = []
 
@@ -1541,6 +1734,17 @@ def extract_metric(
         ):
             continue
 
+        # ====================================================
+        # 連結・個別のスコープを統一する
+        # ====================================================
+
+        if not fact_matches_report_scope(
+            fact,
+            definition,
+            is_consolidated_report,
+        ):
+            continue
+
         value_text = get_fact_value(
             fact,
             [
@@ -1559,7 +1763,7 @@ def extract_metric(
             parsed_value = parse_number(value_text)
 
             # =================================================
-            # 配当項目で明示的に「－」の場合は0円として扱う
+            # 配当が明示的に「－」の場合は0円
             # =================================================
 
             if (
@@ -1600,16 +1804,23 @@ def extract_metric(
 
         element_suffix = element_id.split(":")[-1]
 
+        context_id = get_fact_value(
+            fact,
+            [
+                "コンテキストID",
+                "context_id",
+            ],
+        )
+
         # ====================================================
-        # 要素IDの完全一致を最優先する
+        # 標準要素IDの完全一致を優先
         # ====================================================
 
         if element_suffix in element_ids:
             score += 500
 
         # ====================================================
-        # 単位も一致していれば補助的に加点する
-        # 単位不一致だけでは除外しない
+        # 単位一致は補助的な加点
         # ====================================================
 
         if fact_matches_expected_unit(
@@ -1617,6 +1828,37 @@ def extract_metric(
             definition,
         ):
             score += 20
+
+        # ====================================================
+        # 発行済株式数は普通株式を優先
+        # ====================================================
+
+        if definition.get("expected_unit") == "shares":
+            if "CommonStockMember" in context_id:
+                score += 200
+
+            if any(
+                marker in context_id
+                for marker in [
+                    "PreferredStockMember",
+                    "ClassA",
+                    "ClassB",
+                    "StockAcquisitionRights",
+                ]
+            ):
+                score -= 400
+
+            if (
+                element_suffix
+                == "NumberOfIssuedSharesAsOfFiscalYearEndIssuedSharesTotalNumberOfSharesEtc"
+            ):
+                score += 150
+
+            if (
+                element_suffix
+                == "TotalNumberOfIssuedSharesSummaryOfBusinessResults"
+            ):
+                score += 100
 
         candidates.append(
             {
@@ -1631,13 +1873,8 @@ def extract_metric(
                         "item_name",
                     ],
                 ),
-                "context_id": get_fact_value(
-                    fact,
-                    [
-                        "コンテキストID",
-                        "context_id",
-                    ],
-                ),
+                "context_id": context_id,
+                "scope": get_fact_consolidation_scope(fact),
                 "unit_id": get_fact_value(
                     fact,
                     [
@@ -1672,12 +1909,23 @@ def extract_metric(
 
 
 
+
+# ============================================================
+# 財務情報一括抽出
+# ============================================================
+
 def extract_financial_metrics(
     facts: list[dict[str, str]],
+    is_consolidated_report: bool | None,
 ) -> dict[str, dict[str, Any] | None]:
     return {
-        metric_name: extract_metric(facts, definition)
-        for metric_name, definition in METRIC_DEFINITIONS.items()
+        metric_name: extract_metric(
+            facts,
+            definition,
+            is_consolidated_report,
+        )
+        for metric_name, definition
+        in METRIC_DEFINITIONS.items()
     }
 
 
@@ -2183,7 +2431,34 @@ def main() -> None:
 
             facts = parse_edinet_csv_zip(zip_bytes)
 
-            metrics = extract_financial_metrics(facts)
+            # =================================================
+            # 連結決算の有無を判定
+            # =================================================
+
+            is_consolidated_report = detect_consolidated_report(
+                facts
+            )
+
+            if is_consolidated_report is True:
+                consolidation_label = "連結"
+            elif is_consolidated_report is False:
+                consolidation_label = "非連結"
+            else:
+                consolidation_label = "判定不能"
+
+            print(
+                f"{doc_id}: 決算範囲={consolidation_label}"
+            )
+
+            # =================================================
+            # 決算範囲を統一して財務項目を抽出
+            # =================================================
+
+            metrics = extract_financial_metrics(
+                facts,
+                is_consolidated_report,
+            )
+
 
             extracted_count = sum(
                 1
