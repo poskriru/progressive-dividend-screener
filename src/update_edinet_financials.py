@@ -317,9 +317,13 @@ METRIC_DEFINITIONS = {
     "eps": {
         "element_ids": [
             "BasicEarningsLossPerShare",
+            "BasicEarningsPerShare",
             "BasicEarningsLossPerShareIFRS",
+            "BasicEarningsPerShareIFRS",
             "BasicEarningsLossPerShareSummaryOfBusinessResults",
+            "BasicEarningsPerShareSummaryOfBusinessResults",
             "BasicEarningsLossPerShareIFRSSummaryOfBusinessResults",
+            "BasicEarningsPerShareIFRSSummaryOfBusinessResults",
         ],
         "labels": [
             "1株当たり当期純利益",
@@ -328,6 +332,8 @@ METRIC_DEFINITIONS = {
             "１株当たり当期純損失",
             "1株当たり当期純利益又は1株当たり当期純損失",
             "１株当たり当期純利益又は１株当たり当期純損失",
+            "1株当たり当期純利益又は当期純損失",
+            "１株当たり当期純利益又は当期純損失",
             "基本的1株当たり当期利益",
             "基本的１株当たり当期利益",
             "基本的1株当たり当期利益（△損失）",
@@ -952,37 +958,63 @@ def download_edinet_csv_zip(
     )
 
 
+# ============================================================
+# EDINET CSV ZIPの解析
+# ============================================================
+
 def parse_edinet_csv_zip(zip_bytes: bytes) -> list[dict[str, str]]:
     facts: list[dict[str, str]] = []
 
     with zipfile.ZipFile(io.BytesIO(zip_bytes)) as archive:
-        csv_files = [
-            name
-            for name in archive.namelist()
-            if name.lower().endswith(".csv")
-            and "jpcrp" in name.lower()
-        ]
+        # ====================================================
+        # ZIP内の財務CSVをすべて対象にする
+        #
+        # jpcrp:
+        #   有価証券報告書固有項目・経営指標等
+        #
+        # jppfs:
+        #   日本基準の財務諸表
+        #
+        # jpigp:
+        #   IFRS関連
+        #
+        # jpaud:
+        #   監査関連のため除外
+        # ====================================================
 
-        if not csv_files:
-            csv_files = [
-                name
-                for name in archive.namelist()
-                if name.lower().endswith(".csv")
-                and "xbrl_to_csv" in name.lower()
-                and "jpaud" not in name.lower()
-            ]
+        csv_files = []
+
+        for name in archive.namelist():
+            lower_name = name.lower()
+
+            if not lower_name.endswith(".csv"):
+                continue
+
+            if "jpaud" in lower_name:
+                continue
+
+            csv_files.append(name)
 
         if not csv_files:
             raise RuntimeError(
-                "ZIP内に有価証券報告書のCSVがありません。"
+                "ZIP内に解析可能なCSVファイルがありません。"
             )
+
+        print(
+            f"解析対象CSV: {len(csv_files)}ファイル"
+        )
 
         for filename in csv_files:
             raw = archive.read(filename)
 
             decoded = None
 
-            for encoding in ["utf-16le", "utf-16", "utf-8-sig"]:
+            for encoding in [
+                "utf-16le",
+                "utf-16",
+                "utf-8-sig",
+                "utf-8",
+            ]:
                 try:
                     decoded = raw.decode(encoding)
                     break
@@ -990,12 +1022,18 @@ def parse_edinet_csv_zip(zip_bytes: bytes) -> list[dict[str, str]]:
                     continue
 
             if decoded is None:
+                print(
+                    f"文字コードを判定できないためスキップ: "
+                    f"{filename}"
+                )
                 continue
 
             reader = csv.DictReader(
                 io.StringIO(decoded),
                 delimiter="\t",
             )
+
+            file_fact_count = 0
 
             for row in reader:
                 normalized_row = {
@@ -1005,7 +1043,14 @@ def parse_edinet_csv_zip(zip_bytes: bytes) -> list[dict[str, str]]:
                 }
 
                 normalized_row["_source_file"] = filename
+
                 facts.append(normalized_row)
+                file_fact_count += 1
+
+            print(
+                f"CSV読込: {filename} "
+                f"({file_fact_count:,}行)"
+            )
 
     if not facts:
         raise RuntimeError(
@@ -1013,6 +1058,7 @@ def parse_edinet_csv_zip(zip_bytes: bytes) -> list[dict[str, str]]:
         )
 
     return facts
+
 
 
 # ============================================================
@@ -1372,23 +1418,24 @@ def extract_metric(
 ) -> dict[str, Any] | None:
     candidates = []
 
+    element_ids = set(
+        definition.get("element_ids", [])
+    )
+
+    is_dividend_metric = any(
+        (
+            "Dividend" in element_id
+            or "Dividends" in element_id
+        )
+        for element_id in element_ids
+    )
+
     for fact in facts:
         # ====================================================
-        # 最重要:
-        # 要素IDまたは項目名が一致しない行は候補にしない
+        # 要素IDまたは項目名の一致を必須にする
         # ====================================================
 
         if not fact_matches_definition(
-            fact,
-            definition,
-        ):
-            continue
-
-        # ====================================================
-        # 1株当たり項目・株式数の単位を検証
-        # ====================================================
-
-        if not fact_matches_expected_unit(
             fact,
             definition,
         ):
@@ -1411,6 +1458,24 @@ def extract_metric(
         else:
             parsed_value = parse_number(value_text)
 
+            # =================================================
+            # 配当項目で明示的に「－」の場合は0円として扱う
+            # =================================================
+
+            if (
+                parsed_value is None
+                and is_dividend_metric
+                and normalize_text(value_text)
+                in {
+                    "-",
+                    "－",
+                    "―",
+                    "—",
+                    "–",
+                }
+            ):
+                parsed_value = 0.0
+
             if parsed_value is None:
                 continue
 
@@ -1425,17 +1490,39 @@ def extract_metric(
             definition,
         )
 
+        element_id = get_fact_value(
+            fact,
+            [
+                "要素ID",
+                "element_id",
+            ],
+        )
+
+        element_suffix = element_id.split(":")[-1]
+
+        # ====================================================
+        # 要素IDの完全一致を最優先する
+        # ====================================================
+
+        if element_suffix in element_ids:
+            score += 500
+
+        # ====================================================
+        # 単位も一致していれば補助的に加点する
+        # 単位不一致だけでは除外しない
+        # ====================================================
+
+        if fact_matches_expected_unit(
+            fact,
+            definition,
+        ):
+            score += 20
+
         candidates.append(
             {
                 "score": score,
                 "value": parsed_value,
-                "element_id": get_fact_value(
-                    fact,
-                    [
-                        "要素ID",
-                        "element_id",
-                    ],
-                ),
+                "element_id": element_id,
                 "label": get_fact_value(
                     fact,
                     [
@@ -1481,6 +1568,7 @@ def extract_metric(
     )
 
     return candidates[0]
+
 
 
 
@@ -1547,11 +1635,21 @@ def build_financial_row(
         get_first_value(document, ["提出日時", "submitDateTime"]),
         get_first_value(
             document,
-            ["対象期間開始日", "periodStart"],
+            [
+                "対象期間開始日",
+                "期間開始日",
+                "事業年度開始日",
+                "periodStart",
+            ],
         ),
         get_first_value(
             document,
-            ["対象期間終了日", "periodEnd"],
+            [
+                "対象期間終了日",
+                "期間終了日",
+                "事業年度終了日",
+                "periodEnd",
+            ],
         ),
         security_code,
         get_first_value(document, ["銘柄名"]),
