@@ -534,18 +534,36 @@ def get_spreadsheet_metadata(service, spreadsheet_id: str) -> dict:
     )
 
 
+# ============================================================
+# シートの取得・新規作成
+# ============================================================
+
 def get_or_create_sheet(
     service,
     spreadsheet_id: str,
     sheet_name: str,
 ) -> int:
-    metadata = get_spreadsheet_metadata(service, spreadsheet_id)
+    metadata = get_spreadsheet_metadata(
+        service,
+        spreadsheet_id,
+    )
+
+    # ========================================================
+    # 既存シートを検索
+    # ========================================================
 
     for sheet in metadata.get("sheets", []):
         properties = sheet.get("properties", {})
 
         if properties.get("title") == sheet_name:
             return properties["sheetId"]
+
+    # ========================================================
+    # シートが存在しない場合は新規作成
+    #
+    # frozenRowCountはproperties直下ではなく、
+    # gridPropertiesの中に指定する。
+    # ========================================================
 
     response = (
         service.spreadsheets()
@@ -557,7 +575,9 @@ def get_or_create_sheet(
                         "addSheet": {
                             "properties": {
                                 "title": sheet_name,
-                                "frozenRowCount": 1,
+                                "gridProperties": {
+                                    "frozenRowCount": 1,
+                                },
                             }
                         }
                     }
