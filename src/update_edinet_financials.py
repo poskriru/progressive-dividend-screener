@@ -2791,6 +2791,50 @@ def extract_metric(
             score += 250
 
         # ====================================================
+        # 純利益は親会社所有者帰属利益を最優先
+        #
+        # IFRSでは次の2種類が同時に存在する。
+        #
+        # ProfitLoss:
+        #   非支配持分を含む当期利益全体
+        #
+        # ProfitLossAttributableToOwnersOfParent:
+        #   親会社の所有者に帰属する当期利益
+        #
+        # 株式指標のROE・EPS等で使用する純利益には、
+        # 親会社所有者帰属利益を採用する。
+        # ====================================================
+
+        if metric_name == "net_income":
+            parent_owner_element_ids = {
+                "ProfitLossAttributableToOwnersOfParent",
+                "ProfitLossAttributableToOwnersOfParentSummaryOfBusinessResults",
+                "ProfitLossAttributableToOwnersOfParentIFRS",
+                "ProfitLossAttributableToOwnersOfParentIFRSSummaryOfBusinessResults",
+            }
+
+            generic_profit_element_ids = {
+                "ProfitLoss",
+                "ProfitLossSummaryOfBusinessResults",
+                "ProfitLossIFRS",
+                "ProfitLossIFRSSummaryOfBusinessResults",
+            }
+
+            if element_suffix in parent_owner_element_ids:
+                score += 500
+            elif element_suffix in generic_profit_element_ids:
+                score -= 100
+
+            # 財務諸表本表や持分変動表の内訳コンテキストより、
+            # ディメンションのない当期全体の値を優先する。
+            if context_id == "CurrentYearDuration":
+                score += 100
+            elif context_id.startswith(
+                "CurrentYearDuration_"
+            ):
+                score -= 200
+
+        # ====================================================
         # 単位一致は補助的な加点
         # ====================================================
 
