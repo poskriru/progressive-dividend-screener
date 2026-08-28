@@ -443,6 +443,226 @@ METRIC_DEFINITIONS = {
     },
 }
 
+# ============================================================
+# IFRS要素・決算期間要素の追加
+# ============================================================
+
+def extend_metric_definition(
+    metric_name: str,
+    key: str,
+    values: list[str],
+) -> None:
+    """
+    財務項目定義へ値を重複なしで追加する。
+    """
+    definition = METRIC_DEFINITIONS[metric_name]
+    existing_values = definition.setdefault(key, [])
+
+    for value in values:
+        if value not in existing_values:
+            existing_values.append(value)
+
+
+# ============================================================
+# IFRSの経営指標等で使用される要素IDを追加
+# ============================================================
+
+extend_metric_definition(
+    "revenue",
+    "element_ids",
+    [
+        "RevenueIFRSSummaryOfBusinessResults",
+        "OperatingRevenueIFRS",
+        "OperatingRevenueIFRSSummaryOfBusinessResults",
+    ],
+)
+
+extend_metric_definition(
+    "revenue",
+    "labels",
+    [
+        "売上収益（IFRS）",
+        "営業収益（IFRS）",
+    ],
+)
+
+extend_metric_definition(
+    "operating_income",
+    "element_ids",
+    [
+        "OperatingProfitLossIFRS",
+        "OperatingProfitLossIFRSSummaryOfBusinessResults",
+    ],
+)
+
+extend_metric_definition(
+    "operating_income",
+    "labels",
+    [
+        "営業利益（IFRS）",
+        "営業損失（IFRS）",
+    ],
+)
+
+extend_metric_definition(
+    "net_income",
+    "element_ids",
+    [
+        "ProfitLossIFRS",
+        "ProfitLossIFRSSummaryOfBusinessResults",
+        "ProfitLossAttributableToOwnersOfParentIFRS",
+        "ProfitLossAttributableToOwnersOfParentIFRSSummaryOfBusinessResults",
+    ],
+)
+
+extend_metric_definition(
+    "net_income",
+    "labels",
+    [
+        "親会社の所有者に帰属する当期利益（IFRS）",
+        "親会社の所有者に帰属する当期損失（IFRS）",
+        "親会社の所有者に帰属する当期利益（△損失）（IFRS）",
+    ],
+)
+
+extend_metric_definition(
+    "total_assets",
+    "element_ids",
+    [
+        "AssetsIFRS",
+        "AssetsIFRSSummaryOfBusinessResults",
+        "TotalAssetsIFRS",
+        "TotalAssetsIFRSSummaryOfBusinessResults",
+    ],
+)
+
+extend_metric_definition(
+    "total_assets",
+    "labels",
+    [
+        "資産合計（IFRS）",
+        "総資産額（IFRS）",
+    ],
+)
+
+extend_metric_definition(
+    "net_assets",
+    "element_ids",
+    [
+        "EquityIFRS",
+        "EquityIFRSSummaryOfBusinessResults",
+        "TotalEquityIFRS",
+        "TotalEquityIFRSSummaryOfBusinessResults",
+    ],
+)
+
+extend_metric_definition(
+    "net_assets",
+    "labels",
+    [
+        "資本合計",
+        "資本合計（IFRS）",
+    ],
+)
+
+extend_metric_definition(
+    "equity",
+    "element_ids",
+    [
+        "EquityAttributableToOwnersOfParentIFRS",
+        "EquityAttributableToOwnersOfParentIFRSSummaryOfBusinessResults",
+    ],
+)
+
+extend_metric_definition(
+    "equity",
+    "labels",
+    [
+        "親会社の所有者に帰属する持分",
+        "親会社の所有者に帰属する持分（IFRS）",
+        "親会社所有者帰属持分",
+    ],
+)
+
+extend_metric_definition(
+    "eps",
+    "element_ids",
+    [
+        "BasicEarningsLossPerShareIFRS",
+        "BasicEarningsPerShareIFRS",
+        "BasicEarningsLossPerShareIFRSSummaryOfBusinessResults",
+        "BasicEarningsPerShareIFRSSummaryOfBusinessResults",
+    ],
+)
+
+extend_metric_definition(
+    "eps",
+    "labels",
+    [
+        "基本的1株当たり当期利益（IFRS）",
+        "基本的１株当たり当期利益（IFRS）",
+        "基本的1株当たり当期利益（△損失）（IFRS）",
+        "基本的１株当たり当期利益（△損失）（IFRS）",
+    ],
+)
+
+extend_metric_definition(
+    "bps",
+    "element_ids",
+    [
+        "EquityAttributableToOwnersOfParentPerShareIFRS",
+        "EquityAttributableToOwnersOfParentPerShareIFRSSummaryOfBusinessResults",
+        "EquityPerShareAttributableToOwnersOfParentIFRS",
+        "EquityPerShareAttributableToOwnersOfParentIFRSSummaryOfBusinessResults",
+    ],
+)
+
+extend_metric_definition(
+    "bps",
+    "labels",
+    [
+        "1株当たり親会社所有者帰属持分（IFRS）",
+        "１株当たり親会社所有者帰属持分（IFRS）",
+    ],
+)
+
+
+# ============================================================
+# 対象期間開始日・終了日の定義
+# ============================================================
+
+METRIC_DEFINITIONS["period_start"] = {
+    "element_ids": [
+        "CurrentFiscalYearStartDateDEI",
+        "CurrentPeriodStartDateDEI",
+    ],
+    "labels": [
+        "当会計期間開始日、DEI",
+        "当事業年度開始日、DEI",
+        "当会計期間開始日",
+        "当事業年度開始日",
+    ],
+    "kind": "text",
+    "prefer_consolidated": False,
+    "standard_sensitive": False,
+}
+
+METRIC_DEFINITIONS["period_end"] = {
+    "element_ids": [
+        "CurrentFiscalYearEndDateDEI",
+        "CurrentPeriodEndDateDEI",
+    ],
+    "labels": [
+        "当会計期間終了日、DEI",
+        "当事業年度終了日、DEI",
+        "当会計期間終了日",
+        "当事業年度終了日",
+    ],
+    "kind": "text",
+    "prefer_consolidated": False,
+    "standard_sensitive": False,
+}
+
 
 # ============================================================
 # 共通処理
@@ -1522,6 +1742,245 @@ def fact_value_is_reasonable(
     return True
 
 # ============================================================
+# 会計基準の判定
+# ============================================================
+
+def normalize_accounting_standard(value: Any) -> str:
+    """
+    EDINETの会計基準表記を統一する。
+    """
+    text = normalize_matching_text(value).lower()
+
+    if not text:
+        return ""
+
+    if (
+        "ifrs" in text
+        or "国際財務報告基準" in text
+        or "国際会計基準" in text
+    ):
+        return "IFRS"
+
+    if (
+        "japanesegaap" in text
+        or "japangaap" in text
+        or "日本基準" in text
+        or "企業会計基準" in text
+    ):
+        return "Japan GAAP"
+
+    if "usgaap" in text or "米国基準" in text:
+        return "US GAAP"
+
+    return normalize_text(value)
+
+
+def detect_accounting_standard(
+    facts: list[dict[str, str]],
+) -> str:
+    """
+    AccountingStandardsDEIから書類全体の会計基準を取得する。
+    """
+    target_element_ids = {
+        "AccountingStandardsDEI",
+    }
+
+    target_labels = {
+        normalize_matching_text("会計基準、DEI"),
+        normalize_matching_text("会計基準"),
+    }
+
+    candidates = []
+
+    for fact in facts:
+        element_id = get_fact_value(
+            fact,
+            [
+                "要素ID",
+                "element_id",
+                "Element ID",
+            ],
+        )
+
+        element_suffix = element_id.split(":")[-1]
+
+        label = normalize_matching_text(
+            get_fact_value(
+                fact,
+                [
+                    "項目名",
+                    "ラベル",
+                    "item_name",
+                ],
+            )
+        )
+
+        if (
+            element_suffix not in target_element_ids
+            and label not in target_labels
+        ):
+            continue
+
+        value = get_fact_value(
+            fact,
+            [
+                "値",
+                "value",
+                "Value",
+            ],
+        )
+
+        accounting_standard = normalize_accounting_standard(
+            value
+        )
+
+        if not accounting_standard:
+            continue
+
+        context_id = get_fact_value(
+            fact,
+            [
+                "コンテキストID",
+                "context_id",
+            ],
+        )
+
+        score = 0
+
+        if element_suffix == "AccountingStandardsDEI":
+            score += 200
+
+        if "FilingDateInstant" in context_id:
+            score += 50
+
+        candidates.append(
+            {
+                "score": score,
+                "value": accounting_standard,
+                "element_id": element_id,
+                "context_id": context_id,
+            }
+        )
+
+    if not candidates:
+        return ""
+
+    candidates.sort(
+        key=lambda item: item["score"],
+        reverse=True,
+    )
+
+    return candidates[0]["value"]
+
+
+def get_fact_accounting_standard_scope(
+    fact: dict[str, str],
+) -> str:
+    """
+    ファクトがIFRS、日本基準、または会計基準に依存しない
+    共通項目のどれに該当するかを判定する。
+
+    戻り値:
+        ifrs
+        japan_gaap
+        neutral
+    """
+    element_id = get_fact_value(
+        fact,
+        [
+            "要素ID",
+            "element_id",
+            "Element ID",
+        ],
+    )
+
+    source_file = normalize_text(
+        fact.get("_source_file", "")
+    ).lower()
+
+    element_id_lower = element_id.lower()
+    element_suffix = element_id.split(":")[-1]
+    element_suffix_lower = element_suffix.lower()
+
+    namespace_prefix = ""
+
+    if ":" in element_id:
+        namespace_prefix = element_id.split(":", 1)[0].lower()
+
+    # IFRS標準タクソノミまたはIFRS専用要素
+    if (
+        "jpigp" in namespace_prefix
+        or "jpigp" in source_file
+        or "ifrs" in element_suffix_lower
+        or "ifrs" in element_id_lower
+    ):
+        return "ifrs"
+
+    # 日本基準の財務諸表タクソノミ
+    if (
+        "jppfs" in namespace_prefix
+        or "jppfs" in source_file
+    ):
+        return "japan_gaap"
+
+    # 経営指標等にIFRS表記がない場合は日本基準値として扱う。
+    #
+    # IFRS移行年度の有価証券報告書には、
+    # IFRS値と監査対象外の日本基準値が併記される場合がある。
+    if "summaryofbusinessresults" in element_suffix_lower:
+        if "ifrs" in element_suffix_lower:
+            return "ifrs"
+
+        return "japan_gaap"
+
+    return "neutral"
+
+
+def fact_matches_accounting_standard(
+    fact: dict[str, str],
+    definition: dict[str, Any],
+    accounting_standard: str,
+) -> bool:
+    """
+    書類の採用会計基準と異なる財務ファクトを除外する。
+
+    配当・株式数・DEI・決算期間など、会計基準に依存しない
+    項目には適用しない。
+    """
+    standard_sensitive = definition.get(
+        "standard_sensitive",
+        definition.get("prefer_consolidated", False),
+    )
+
+    if not standard_sensitive:
+        return True
+
+    normalized_standard = normalize_accounting_standard(
+        accounting_standard
+    )
+
+    if not normalized_standard:
+        return True
+
+    fact_scope = get_fact_accounting_standard_scope(fact)
+
+    # 発行会社独自要素など、会計基準を断定できない要素は
+    # ラベル一致などの条件を満たしていれば候補に残す。
+    if fact_scope == "neutral":
+        return True
+
+    if normalized_standard == "IFRS":
+        return fact_scope == "ifrs"
+
+    if normalized_standard == "Japan GAAP":
+        return fact_scope == "japan_gaap"
+
+    # US GAAPなど、現在個別対応していない基準は
+    # 明らかなIFRS・日本基準要素だけを除外する。
+    return fact_scope == "neutral"
+
+
+# ============================================================
 # 連結・個別の判定
 # ============================================================
 
@@ -1700,14 +2159,12 @@ def fact_matches_report_scope(
 # 財務項目の抽出
 # ============================================================
 
-# ============================================================
-# 財務項目の抽出
-# ============================================================
-
 def extract_metric(
     facts: list[dict[str, str]],
+    metric_name: str,
     definition: dict[str, Any],
     is_consolidated_report: bool | None,
+    accounting_standard: str,
 ) -> dict[str, Any] | None:
     candidates = []
 
@@ -1715,12 +2172,8 @@ def extract_metric(
         definition.get("element_ids", [])
     )
 
-    is_dividend_metric = any(
-        (
-            "Dividend" in element_id
-            or "Dividends" in element_id
-        )
-        for element_id in element_ids
+    is_dividend_metric = (
+        metric_name == "dividend_per_share"
     )
 
     for fact in facts:
@@ -1731,6 +2184,17 @@ def extract_metric(
         if not fact_matches_definition(
             fact,
             definition,
+        ):
+            continue
+
+        # ====================================================
+        # IFRSと日本基準を混在させない
+        # ====================================================
+
+        if not fact_matches_accounting_standard(
+            fact,
+            definition,
+            accounting_standard,
         ):
             continue
 
@@ -1799,6 +2263,7 @@ def extract_metric(
             [
                 "要素ID",
                 "element_id",
+                "Element ID",
             ],
         )
 
@@ -1812,12 +2277,36 @@ def extract_metric(
             ],
         )
 
+        fact_accounting_scope = (
+            get_fact_accounting_standard_scope(fact)
+        )
+
         # ====================================================
         # 標準要素IDの完全一致を優先
         # ====================================================
 
         if element_suffix in element_ids:
             score += 500
+
+        # ====================================================
+        # 書類の採用会計基準と一致する要素を優先
+        # ====================================================
+
+        normalized_standard = normalize_accounting_standard(
+            accounting_standard
+        )
+
+        if (
+            normalized_standard == "IFRS"
+            and fact_accounting_scope == "ifrs"
+        ):
+            score += 250
+
+        if (
+            normalized_standard == "Japan GAAP"
+            and fact_accounting_scope == "japan_gaap"
+        ):
+            score += 250
 
         # ====================================================
         # 単位一致は補助的な加点
@@ -1875,6 +2364,7 @@ def extract_metric(
                 ),
                 "context_id": context_id,
                 "scope": get_fact_consolidation_scope(fact),
+                "accounting_scope": fact_accounting_scope,
                 "unit_id": get_fact_value(
                     fact,
                     [
@@ -1909,7 +2399,6 @@ def extract_metric(
 
 
 
-
 # ============================================================
 # 財務情報一括抽出
 # ============================================================
@@ -1917,16 +2406,61 @@ def extract_metric(
 def extract_financial_metrics(
     facts: list[dict[str, str]],
     is_consolidated_report: bool | None,
+    accounting_standard: str,
 ) -> dict[str, dict[str, Any] | None]:
-    return {
+    metrics = {
         metric_name: extract_metric(
             facts,
+            metric_name,
             definition,
             is_consolidated_report,
+            accounting_standard,
         )
         for metric_name, definition
         in METRIC_DEFINITIONS.items()
     }
+
+    # AccountingStandardsDEIの表記を統一した値で上書きする。
+    if accounting_standard:
+        existing_metric = metrics.get(
+            "accounting_standard"
+        )
+
+        metrics["accounting_standard"] = {
+            "score": (
+                existing_metric.get("score", 0)
+                if existing_metric
+                else 0
+            ),
+            "value": accounting_standard,
+            "element_id": (
+                existing_metric.get("element_id", "")
+                if existing_metric
+                else "AccountingStandardsDEI"
+            ),
+            "label": (
+                existing_metric.get("label", "")
+                if existing_metric
+                else "会計基準、DEI"
+            ),
+            "context_id": (
+                existing_metric.get("context_id", "")
+                if existing_metric
+                else ""
+            ),
+            "scope": "unknown",
+            "accounting_scope": "neutral",
+            "unit_id": "",
+            "unit": "",
+            "source_file": (
+                existing_metric.get("source_file", "")
+                if existing_metric
+                else ""
+            ),
+        }
+
+    return metrics
+
 
 
 def metric_value(
@@ -1972,16 +2506,24 @@ def build_financial_row(
         )
     )
 
+    metadata_metric_names = {
+        "accounting_standard",
+        "period_start",
+        "period_end",
+    }
+
     extracted_count = sum(
         1
         for name, metric in metrics.items()
-        if name != "accounting_standard" and metric is not None
+        if (
+            name not in metadata_metric_names
+            and metric is not None
+        )
     )
 
-    return [
-        datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S"),
-        get_first_value(document, ["提出日時", "submitDateTime"]),
-        get_first_value(
+    period_start = (
+        metric_value(metrics, "period_start")
+        or get_first_value(
             document,
             [
                 "対象期間開始日",
@@ -1989,8 +2531,12 @@ def build_financial_row(
                 "事業年度開始日",
                 "periodStart",
             ],
-        ),
-        get_first_value(
+        )
+    )
+
+    period_end = (
+        metric_value(metrics, "period_end")
+        or get_first_value(
             document,
             [
                 "対象期間終了日",
@@ -1998,40 +2544,127 @@ def build_financial_row(
                 "事業年度終了日",
                 "periodEnd",
             ],
+        )
+    )
+
+    return [
+        datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S"),
+        get_first_value(
+            document,
+            ["提出日時", "submitDateTime"],
         ),
+        normalize_text(period_start),
+        normalize_text(period_end),
         security_code,
         get_first_value(document, ["銘柄名"]),
         get_first_value(document, ["市場"]),
-        get_first_value(document, ["提出者名", "filerName"]),
-        get_first_value(document, ["EDINETコード", "edinetCode"]),
+        get_first_value(
+            document,
+            ["提出者名", "filerName"],
+        ),
+        get_first_value(
+            document,
+            ["EDINETコード", "edinetCode"],
+        ),
         doc_id,
-        get_first_value(document, ["書類種別", "書類概要"]),
-        metric_value(metrics, "accounting_standard") or "",
-        safe_round(yen_to_million(metric_value(metrics, "revenue"))),
-        safe_round(yen_to_million(metric_value(metrics, "operating_income"))),
-        safe_round(yen_to_million(metric_value(metrics, "ordinary_income"))),
-        safe_round(yen_to_million(metric_value(metrics, "net_income"))),
-        safe_round(yen_to_million(metric_value(metrics, "total_assets"))),
-        safe_round(yen_to_million(metric_value(metrics, "net_assets"))),
-        safe_round(yen_to_million(metric_value(metrics, "equity"))),
-        safe_round(yen_to_million(metric_value(metrics, "operating_cf"))),
-        safe_round(yen_to_million(metric_value(metrics, "investing_cf"))),
-        safe_round(yen_to_million(metric_value(metrics, "financing_cf"))),
-        safe_round(yen_to_million(metric_value(metrics, "cash"))),
+        get_first_value(
+            document,
+            ["書類種別", "書類概要"],
+        ),
+        metric_value(
+            metrics,
+            "accounting_standard",
+        ) or "",
+        safe_round(
+            yen_to_million(
+                metric_value(metrics, "revenue")
+            )
+        ),
+        safe_round(
+            yen_to_million(
+                metric_value(
+                    metrics,
+                    "operating_income",
+                )
+            )
+        ),
+        safe_round(
+            yen_to_million(
+                metric_value(
+                    metrics,
+                    "ordinary_income",
+                )
+            )
+        ),
+        safe_round(
+            yen_to_million(
+                metric_value(metrics, "net_income")
+            )
+        ),
+        safe_round(
+            yen_to_million(
+                metric_value(metrics, "total_assets")
+            )
+        ),
+        safe_round(
+            yen_to_million(
+                metric_value(metrics, "net_assets")
+            )
+        ),
+        safe_round(
+            yen_to_million(
+                metric_value(metrics, "equity")
+            )
+        ),
+        safe_round(
+            yen_to_million(
+                metric_value(metrics, "operating_cf")
+            )
+        ),
+        safe_round(
+            yen_to_million(
+                metric_value(metrics, "investing_cf")
+            )
+        ),
+        safe_round(
+            yen_to_million(
+                metric_value(metrics, "financing_cf")
+            )
+        ),
+        safe_round(
+            yen_to_million(
+                metric_value(metrics, "cash")
+            )
+        ),
         safe_round(metric_value(metrics, "eps")),
         safe_round(metric_value(metrics, "bps")),
-        safe_round(metric_value(metrics, "dividend_per_share")),
-        safe_round(metric_value(metrics, "shares_issued"), 0),
+        safe_round(
+            metric_value(
+                metrics,
+                "dividend_per_share",
+            )
+        ),
+        safe_round(
+            metric_value(metrics, "shares_issued"),
+            0,
+        ),
         extracted_count,
         status,
         error_message[:1000],
         metric_element_id(metrics, "revenue"),
-        metric_element_id(metrics, "operating_income"),
+        metric_element_id(
+            metrics,
+            "operating_income",
+        ),
         metric_element_id(metrics, "net_income"),
-        metric_element_id(metrics, "dividend_per_share"),
+        metric_element_id(
+            metrics,
+            "dividend_per_share",
+        ),
         "金融庁EDINET API",
         EDINET_VIEW_URL.format(doc_id=doc_id),
     ]
+
 
 
 # ============================================================
@@ -2432,6 +3065,22 @@ def main() -> None:
             facts = parse_edinet_csv_zip(zip_bytes)
 
             # =================================================
+            # 会計基準を判定
+            # =================================================
+
+            accounting_standard = detect_accounting_standard(
+                facts
+            )
+
+            if not accounting_standard:
+                accounting_standard = "判定不能"
+
+            print(
+                f"{doc_id}: "
+                f"会計基準={accounting_standard}"
+            )
+
+            # =================================================
             # 連結決算の有無を判定
             # =================================================
 
@@ -2447,24 +3096,33 @@ def main() -> None:
                 consolidation_label = "判定不能"
 
             print(
-                f"{doc_id}: 決算範囲={consolidation_label}"
+                f"{doc_id}: "
+                f"決算範囲={consolidation_label}"
             )
 
             # =================================================
-            # 決算範囲を統一して財務項目を抽出
+            # 会計基準と決算範囲を統一して抽出
             # =================================================
 
             metrics = extract_financial_metrics(
                 facts,
                 is_consolidated_report,
+                accounting_standard,
             )
 
+            metadata_metric_names = {
+                "accounting_standard",
+                "period_start",
+                "period_end",
+            }
 
             extracted_count = sum(
                 1
                 for name, value in metrics.items()
-                if name != "accounting_standard"
-                and value is not None
+                if (
+                    name not in metadata_metric_names
+                    and value is not None
+                )
             )
 
             if extracted_count == 0:
@@ -2472,12 +3130,35 @@ def main() -> None:
                     "対象財務項目を1件も抽出できませんでした。"
                 )
 
-            if (
-                metric_value(metrics, "revenue") is None
-                or metric_value(metrics, "net_income") is None
-                or metric_value(metrics, "total_assets") is None
-            ):
+            # =================================================
+            # 主要項目の欠損判定
+            # =================================================
+
+            required_metric_names = [
+                "revenue",
+                "net_income",
+                "total_assets",
+                "equity",
+                "eps",
+                "bps",
+            ]
+
+            missing_metric_names = [
+                metric_name
+                for metric_name in required_metric_names
+                if metric_value(
+                    metrics,
+                    metric_name,
+                ) is None
+            ]
+
+            if missing_metric_names:
                 missing_metric_count += 1
+
+                print(
+                    f"{doc_id}: 主要項目欠損="
+                    f"{', '.join(missing_metric_names)}"
+                )
 
             new_rows.append(
                 build_financial_row(
@@ -2488,6 +3169,7 @@ def main() -> None:
             )
 
             success_count += 1
+
 
         except Exception as exc:
             print(
