@@ -1,0 +1,101 @@
+name: EDINET書類一覧の更新
+
+# ============================================================
+# 実行条件
+# ============================================================
+
+on:
+  # GitHub Actions画面から手動実行できます。
+  workflow_dispatch:
+    inputs:
+      lookback_days:
+        description: "何日前までEDINET書類を取得するか"
+        required: true
+        default: "30"
+        type: string
+
+  # 毎日、日本時間23時に実行します。
+  # UTC 14:00 = 日本時間23:00
+  schedule:
+    - cron: "0 14 * * *"
+
+
+# ============================================================
+# 権限
+# ============================================================
+
+permissions:
+  contents: read
+
+
+# ============================================================
+# 同時実行制御
+# ============================================================
+
+concurrency:
+  group: update-edinet-documents
+  cancel-in-progress: false
+
+
+# ============================================================
+# ジョブ
+# ============================================================
+
+jobs:
+  update-edinet-documents:
+    name: EDINET書類一覧更新
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      TZ: Asia/Tokyo
+
+      GOOGLE_SERVICE_ACCOUNT_JSON: >-
+        ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+
+      GOOGLE_SPREADSHEET_ID: >-
+        ${{ secrets.GOOGLE_SPREADSHEET_ID }}
+
+      DISCORD_WEBHOOK_URL: >-
+        ${{ secrets.DISCORD_WEBHOOK_URL }}
+
+      EDINET_API_KEY: >-
+        ${{ secrets.EDINET_API_KEY }}
+
+      EDINET_LOOKBACK_DAYS: >-
+        ${{ github.event.inputs.lookback_days || '7' }}
+
+    steps:
+      # ======================================================
+      # リポジトリ取得
+      # ======================================================
+
+      - name: リポジトリを取得
+        uses: actions/checkout@v4
+
+      # ======================================================
+      # Pythonセットアップ
+      # ======================================================
+
+      - name: Pythonをセットアップ
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # ======================================================
+      # 依存パッケージ
+      # ======================================================
+
+      - name: Pythonパッケージをインストール
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # ======================================================
+      # EDINET書類一覧
+      # ======================================================
+
+      - name: EDINET書類一覧を更新
+        run: |
+          python src/update_edinet_documents.py
