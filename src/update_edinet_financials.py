@@ -1979,6 +1979,167 @@ def fact_matches_accounting_standard(
     # 明らかなIFRS・日本基準要素だけを除外する。
     return fact_scope == "neutral"
 
+# ============================================================
+# 財務項目候補の診断出力
+# ============================================================
+
+def print_metric_candidate_diagnostics(
+    facts: list[dict[str, str]],
+    metric_names: list[str],
+    accounting_standard: str,
+    is_consolidated_report: bool | None,
+) -> None:
+    """
+    指定した財務項目について、要素IDまたはラベルが一致する
+    全候補をGitHub Actionsのログへ出力する。
+
+    抽出値の変更は行わず、診断目的でのみ使用する。
+    """
+    for metric_name in metric_names:
+        definition = METRIC_DEFINITIONS[metric_name]
+
+        print(
+            "============================================================"
+        )
+        print(
+            f"診断開始: metric={metric_name}, "
+            f"accounting_standard={accounting_standard}, "
+            f"is_consolidated={is_consolidated_report}"
+        )
+
+        matched_count = 0
+
+        for fact in facts:
+            if not fact_matches_definition(
+                fact,
+                definition,
+            ):
+                continue
+
+            matched_count += 1
+
+            element_id = get_fact_value(
+                fact,
+                [
+                    "要素ID",
+                    "element_id",
+                    "Element ID",
+                ],
+            )
+
+            label = get_fact_value(
+                fact,
+                [
+                    "項目名",
+                    "ラベル",
+                    "item_name",
+                ],
+            )
+
+            value = get_fact_value(
+                fact,
+                [
+                    "値",
+                    "value",
+                    "Value",
+                ],
+            )
+
+            context_id = get_fact_value(
+                fact,
+                [
+                    "コンテキストID",
+                    "context_id",
+                ],
+            )
+
+            relative_year = get_fact_value(
+                fact,
+                [
+                    "相対年度",
+                    "relative_year",
+                ],
+            )
+
+            consolidated_type = get_fact_value(
+                fact,
+                [
+                    "連結・個別",
+                    "連結個別",
+                    "consolidated_or_nonconsolidated",
+                ],
+            )
+
+            unit_id = get_fact_value(
+                fact,
+                [
+                    "ユニットID",
+                    "unit_id",
+                    "Unit ID",
+                ],
+            )
+
+            source_file = normalize_text(
+                fact.get("_source_file", "")
+            )
+
+            accounting_scope = (
+                get_fact_accounting_standard_scope(fact)
+            )
+
+            consolidation_scope = (
+                get_fact_consolidation_scope(fact)
+            )
+
+            accounting_match = (
+                fact_matches_accounting_standard(
+                    fact,
+                    definition,
+                    accounting_standard,
+                )
+            )
+
+            consolidation_match = (
+                fact_matches_report_scope(
+                    fact,
+                    definition,
+                    is_consolidated_report,
+                )
+            )
+
+            candidate_score = score_fact(
+                fact,
+                definition,
+            )
+
+            print(
+                f"[{matched_count}] "
+                f"metric={metric_name} | "
+                f"value={value} | "
+                f"element_id={element_id} | "
+                f"label={label} | "
+                f"context_id={context_id} | "
+                f"relative_year={relative_year} | "
+                f"consolidated_type={consolidated_type} | "
+                f"accounting_scope={accounting_scope} | "
+                f"consolidation_scope={consolidation_scope} | "
+                f"accounting_match={accounting_match} | "
+                f"consolidation_match={consolidation_match} | "
+                f"unit_id={unit_id} | "
+                f"score={candidate_score} | "
+                f"source_file={source_file}"
+            )
+
+        if matched_count == 0:
+            print(
+                f"診断結果: {metric_name} の一致候補なし"
+            )
+
+        print(
+            f"診断終了: metric={metric_name}, "
+            f"候補数={matched_count}"
+        )
+
 
 # ============================================================
 # 連結・個別の判定
@@ -3099,6 +3260,26 @@ def main() -> None:
                 f"{doc_id}: "
                 f"決算範囲={consolidation_label}"
             )
+
+            # =================================================
+            # IFRS3社の財務項目候補を診断
+            # =================================================
+
+            if doc_id in {
+                "S100YYKB",  # 523A セイワホールディングス
+                "S100YYQX",  # 277A グロービング
+                "S100YTII",  # 4088 エア・ウォーター
+            }:
+                print_metric_candidate_diagnostics(
+                    facts,
+                    [
+                        "net_income",
+                        "net_assets",
+                        "equity",
+                    ],
+                    accounting_standard,
+                    is_consolidated_report,
+                )
 
             # =================================================
             # 会計基準と決算範囲を統一して抽出
