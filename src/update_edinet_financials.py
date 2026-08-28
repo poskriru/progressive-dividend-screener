@@ -165,12 +165,18 @@ METRIC_DEFINITIONS = {
     "operating_income": {
         "element_ids": [
             "OperatingIncome",
-            "OperatingProfitLossIFRS",
+            "OperatingIncomeLoss",
+            "OperatingIncomeLossSummaryOfBusinessResults",
             "OperatingProfitLoss",
+            "OperatingProfitLossIFRS",
+            "OperatingProfitLossIFRSSummaryOfBusinessResults",
         ],
         "labels": [
             "営業利益",
+            "営業損失",
             "営業利益又は営業損失",
+            "営業利益又は営業損失（△）",
+            "営業利益（△損失）",
             "営業利益（△損失）（IFRS）",
         ],
         "kind": "money",
@@ -179,28 +185,39 @@ METRIC_DEFINITIONS = {
     "ordinary_income": {
         "element_ids": [
             "OrdinaryIncome",
+            "OrdinaryIncomeLoss",
+            "OrdinaryIncomeLossSummaryOfBusinessResults",
         ],
         "labels": [
             "経常利益",
+            "経常損失",
             "経常利益又は経常損失",
+            "経常利益又は経常損失（△）",
         ],
         "kind": "money",
         "prefer_consolidated": True,
     },
     "net_income": {
         "element_ids": [
-            "ProfitLossAttributableToOwnersOfParent",
-            "ProfitLossAttributableToOwnersOfParentIFRS",
             "ProfitLoss",
+            "ProfitLossSummaryOfBusinessResults",
             "ProfitLossIFRS",
+            "ProfitLossIFRSSummaryOfBusinessResults",
+            "ProfitLossAttributableToOwnersOfParent",
+            "ProfitLossAttributableToOwnersOfParentSummaryOfBusinessResults",
+            "ProfitLossAttributableToOwnersOfParentIFRS",
+            "ProfitLossAttributableToOwnersOfParentIFRSSummaryOfBusinessResults",
         ],
         "labels": [
+            "当期純利益",
+            "当期純損失",
+            "当期純利益又は当期純損失",
             "親会社株主に帰属する当期純利益",
+            "親会社株主に帰属する当期純損失",
             "親会社株主に帰属する当期純利益又は親会社株主に帰属する当期純損失",
             "親会社の所有者に帰属する当期利益",
-            "親会社の所有者、当期利益（△損失）（IFRS）",
-            "当期純利益",
-            "当期利益",
+            "親会社の所有者に帰属する当期損失",
+            "親会社の所有者に帰属する当期利益（△損失）",
         ],
         "kind": "money",
         "prefer_consolidated": True,
@@ -209,6 +226,8 @@ METRIC_DEFINITIONS = {
         "element_ids": [
             "Assets",
             "AssetsIFRS",
+            "TotalAssetsSummaryOfBusinessResults",
+            "TotalAssetsIFRSSummaryOfBusinessResults",
         ],
         "labels": [
             "資産合計",
@@ -221,6 +240,7 @@ METRIC_DEFINITIONS = {
     "net_assets": {
         "element_ids": [
             "NetAssets",
+            "NetAssetsSummaryOfBusinessResults",
         ],
         "labels": [
             "純資産合計",
@@ -234,8 +254,9 @@ METRIC_DEFINITIONS = {
         "element_ids": [
             "Equity",
             "EquityIFRS",
-            "EquityAttributableToOwnersOfParentIFRS",
             "ShareholdersEquity",
+            "EquityAttributableToOwnersOfParentIFRS",
+            "EquityAttributableToOwnersOfParentIFRSSummaryOfBusinessResults",
         ],
         "labels": [
             "自己資本",
@@ -303,10 +324,14 @@ METRIC_DEFINITIONS = {
         "labels": [
             "1株当たり当期純利益",
             "１株当たり当期純利益",
+            "1株当たり当期純損失",
+            "１株当たり当期純損失",
+            "1株当たり当期純利益又は1株当たり当期純損失",
+            "１株当たり当期純利益又は１株当たり当期純損失",
             "基本的1株当たり当期利益",
             "基本的１株当たり当期利益",
-            "基本的1株当たり当期利益（△損失）（IFRS）",
-            "基本的１株当たり当期利益（△損失）（IFRS）",
+            "基本的1株当たり当期利益（△損失）",
+            "基本的１株当たり当期利益（△損失）",
         ],
         "kind": "number",
         "expected_unit": "per_share",
@@ -1133,6 +1158,10 @@ def normalize_matching_text(value: Any) -> str:
     )
 
 
+# ============================================================
+# 財務項目の厳密な一致判定
+# ============================================================
+
 def fact_matches_definition(
     fact: dict[str, str],
     definition: dict[str, Any],
@@ -1140,7 +1169,7 @@ def fact_matches_definition(
     """
     要素IDまたは項目名が対象財務項目に一致するか判定する。
 
-    コンテキストや相対年度が当期というだけでは一致としない。
+    相対年度・コンテキストだけでは一致としない。
     """
     element_id = get_fact_value(
         fact,
@@ -1162,6 +1191,10 @@ def fact_matches_definition(
 
     element_suffix = element_id.split(":")[-1]
 
+    # ========================================================
+    # 標準要素IDの完全一致
+    # ========================================================
+
     if element_suffix in definition.get("element_ids", []):
         return True
 
@@ -1172,26 +1205,65 @@ def fact_matches_definition(
         for candidate in definition.get("labels", [])
     }
 
+    # ========================================================
+    # 項目名の完全一致
+    # ========================================================
+
     if normalized_label in normalized_candidate_labels:
         return True
 
+    # ========================================================
+    # EDINETの定型的な補足文字だけを許可
+    # ========================================================
+
+    allowed_suffixes = [
+        "、経営指標等",
+        "、主要な経営指標等の推移",
+        "、連結経営指標等",
+        "、提出会社の経営指標等",
+    ]
+
+    for candidate in normalized_candidate_labels:
+        for allowed_suffix in allowed_suffixes:
+            if normalized_label == candidate + normalize_matching_text(
+                allowed_suffix
+            ):
+                return True
+
     return False
 
+
+
+# ============================================================
+# 財務項目の単位確認
+# ============================================================
 
 def fact_matches_expected_unit(
     fact: dict[str, str],
     definition: dict[str, Any],
 ) -> bool:
     """
-    1株当たり項目、株式数、金額の単位を検証する。
+    要素IDと単位情報を使って、対象項目の単位を確認する。
 
-    単位情報が存在する場合は厳密に確認する。
-    単位情報自体が存在しない場合は、要素ID・項目名の一致を優先する。
+    EDINET CSVでは年度・企業・タクソノミによって
+    単位の表記に差があるため、正しい標準要素IDに
+    PerShareが含まれる場合は単位表記にかかわらず許可する。
     """
     expected_unit = definition.get("expected_unit")
 
     if not expected_unit:
         return True
+
+    element_id = get_fact_value(
+        fact,
+        [
+            "要素ID",
+            "element_id",
+            "Element ID",
+        ],
+    )
+
+    element_suffix = element_id.split(":")[-1]
 
     unit_id = get_fact_value(
         fact,
@@ -1215,16 +1287,24 @@ def fact_matches_expected_unit(
         f"{unit_id} {displayed_unit}"
     ).lower()
 
-    if not combined_unit:
-        return True
+    # ========================================================
+    # 1株当たり項目
+    # ========================================================
 
     if expected_unit == "per_share":
+        # 標準要素ID自体にPerShareが含まれていれば許可する。
+        if "pershare" in element_suffix.lower():
+            return True
+
         per_share_markers = [
+            "jpyper",
+            "jpypershare",
             "jpypershares",
+            "jpy_per_share",
             "jpy_per_shares",
-            "jpy/share",
             "円/株",
             "円・銭",
+            "円銭",
         ]
 
         return any(
@@ -1232,7 +1312,17 @@ def fact_matches_expected_unit(
             for marker in per_share_markers
         )
 
+    # ========================================================
+    # 株式数
+    # ========================================================
+
     if expected_unit == "shares":
+        if (
+            "numberofissuedshares" in element_suffix.lower()
+            or "totalnumberofissuedshares" in element_suffix.lower()
+        ):
+            return True
+
         share_markers = [
             "shares",
             "share",
@@ -1245,6 +1335,7 @@ def fact_matches_expected_unit(
         )
 
     return True
+
 
 
 def fact_value_is_reasonable(
