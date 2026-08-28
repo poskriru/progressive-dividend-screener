@@ -7,6 +7,7 @@ import re
 import sys
 import time
 import traceback
+import unicodedata
 import zipfile
 from datetime import datetime, timezone, timedelta
 from typing import Any
@@ -1304,14 +1305,71 @@ def parse_edinet_csv_zip(zip_bytes: bytes) -> list[dict[str, str]]:
                 delimiter="\t",
             )
 
+            # =================================================
+            # CSVヘッダーをNFKC正規化
+            #
+            # 「要素ＩＤ」のような全角英字を
+            # 「要素ID」へ統一する。
+            # =================================================
+
+            normalized_field_names = [
+                unicodedata.normalize(
+                    "NFKC",
+                    normalize_text(field_name),
+                )
+                for field_name in (
+                    reader.fieldnames or []
+                )
+            ]
+
+            print(
+                f"CSVヘッダー: "
+                f"{normalized_field_names}"
+            )
+
             file_fact_count = 0
 
             for row in reader:
-                normalized_row = {
-                    normalize_text(key): normalize_text(value)
-                    for key, value in row.items()
-                    if key is not None
+                normalized_row = {}
+
+                for key, value in row.items():
+                    if key is None:
+                        continue
+
+                    normalized_key = unicodedata.normalize(
+                        "NFKC",
+                        normalize_text(key),
+                    )
+
+                    normalized_row[normalized_key] = (
+                        normalize_text(value)
+                    )
+
+                # =============================================
+                # 表記揺れを標準キーへ統一
+                # =============================================
+
+                header_aliases = {
+                    "要素Id": "要素ID",
+                    "要素id": "要素ID",
+                    "ElementID": "Element ID",
+                    "コンテキストId": "コンテキストID",
+                    "コンテキストid": "コンテキストID",
+                    "ユニットId": "ユニットID",
+                    "ユニットid": "ユニットID",
                 }
+
+                for source_key, destination_key in (
+                    header_aliases.items()
+                ):
+                    if (
+                        destination_key
+                        not in normalized_row
+                        and source_key in normalized_row
+                    ):
+                        normalized_row[destination_key] = (
+                            normalized_row[source_key]
+                        )
 
                 normalized_row["_source_file"] = filename
 
@@ -1329,7 +1387,6 @@ def parse_edinet_csv_zip(zip_bytes: bytes) -> list[dict[str, str]]:
         )
 
     return facts
-
 
 
 # ============================================================
