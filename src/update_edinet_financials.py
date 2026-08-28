@@ -2512,7 +2512,51 @@ def main() -> None:
 
         time.sleep(REQUEST_INTERVAL_SECONDS)
 
-    all_financial_rows = existing_financial_rows + new_rows
+    # ========================================================
+    # 不完全行の除外・書類管理番号による重複排除
+    # ========================================================
+
+    source_financial_rows = (
+        existing_financial_rows
+        + new_rows
+    )
+
+    financial_rows_by_doc_id: dict[str, list[Any]] = {}
+
+    skipped_incomplete_rows = 0
+    duplicate_rows = 0
+
+    for row in source_financial_rows:
+        if len(row) < len(FINANCIAL_HEADERS):
+            row = row + [""] * (
+                len(FINANCIAL_HEADERS) - len(row)
+            )
+
+        security_code = normalize_security_code(
+            row[4]
+        )
+
+        doc_id = normalize_text(
+            row[9]
+        )
+
+        # 証券コードまたは書類管理番号がない行は保存しない
+        if not security_code or not doc_id:
+            skipped_incomplete_rows += 1
+            continue
+
+        row[4] = security_code
+
+        if doc_id in financial_rows_by_doc_id:
+            duplicate_rows += 1
+
+        # 同じ書類管理番号が複数ある場合は、
+        # 後から処理した新しい行で置き換える。
+        financial_rows_by_doc_id[doc_id] = row
+
+    all_financial_rows = list(
+        financial_rows_by_doc_id.values()
+    )
 
     all_financial_rows.sort(
         key=lambda row: (
@@ -2521,6 +2565,15 @@ def main() -> None:
             normalize_text(row[9]),
         )
     )
+
+    print(
+        f"不完全行除外: {skipped_incomplete_rows}件"
+    )
+
+    print(
+        f"重複行統合: {duplicate_rows}件"
+    )
+
 
     write_sheet(
         service,
