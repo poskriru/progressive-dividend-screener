@@ -1234,38 +1234,185 @@ def download_edinet_csv_zip(
 # EDINET CSV ZIPの解析
 # ============================================================
 
-def parse_edinet_csv_zip(zip_bytes: bytes) -> list[dict[str, str]]:
+def normalize_edinet_csv_header(value: Any) -> str:
+    """
+    EDINET CSVのヘッダーをNFKC正規化し、
+    後段で使用する標準的な日本語キーへ統一する。
+    """
+    normalized = unicodedata.normalize(
+        "NFKC",
+        normalize_text(value),
+    )
+
+    # 比較用として空白を除去し、小文字化する。
+    comparison_key = (
+        normalized
+        .replace(" ", "")
+        .replace("\t", "")
+        .lower()
+    )
+
+    header_aliases = {
+        # 要素ID
+        "要素id": "要素ID",
+        "elementid": "要素ID",
+        "element_id": "要素ID",
+
+        # 項目名
+        "項目名": "項目名",
+        "ラベル": "項目名",
+        "label": "項目名",
+        "itemname": "項目名",
+        "item_name": "項目名",
+
+        # コンテキストID
+        "コンテキストid": "コンテキストID",
+        "contextid": "コンテキストID",
+        "context_id": "コンテキストID",
+
+        # 相対年度
+        "相対年度": "相対年度",
+        "relativeyear": "相対年度",
+        "relative_year": "相対年度",
+
+        # 連結・個別
+        "連結・個別": "連結・個別",
+        "連結個別": "連結・個別",
+        "consolidatedornonconsolidated": "連結・個別",
+        "consolidated_or_nonconsolidated": "連結・個別",
+
+        # 期間・時点
+        "期間・時点": "期間・時点",
+        "期間時点": "期間・時点",
+        "periodtype": "期間・時点",
+        "period_type": "期間・時点",
+
+        # ユニットID
+        "ユニットid": "ユニットID",
+        "unitid": "ユニットID",
+        "unit_id": "ユニットID",
+
+        # 単位
+        "単位": "単位",
+        "unit": "単位",
+
+        # 値
+        "値": "値",
+        "value": "値",
+    }
+
+    return header_aliases.get(
+        comparison_key,
+        normalized,
+    )
+
+
+def decode_edinet_csv(raw: bytes) -> str:
+    """
+    EDINET CSVを適切な文字コードでデコードする。
+
+    単純にutf-16leから順番に試すだけでは、
+    別の文字コードでも例外なく誤デコードされる場合があるため、
+    BOMとヘッダー内容も確認する。
+    """
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+        encoding_candidates = [
+            "utf-16",
+            "utf-16le",
+            "utf-8-sig",
+            "utf-8",
+        ]
+    elif raw.startswith(b"\xef\xbb\xbf"):
+        encoding_candidates = [
+            "utf-8-sig",
+            "utf-8",
+            "utf-16le",
+            "utf-16",
+        ]
+    else:
+        encoding_candidates = [
+            "utf-16le",
+            "utf-16",
+            "utf-8-sig",
+            "utf-8",
+        ]
+
+    fallback_text = None
+
+    for encoding in encoding_candidates:
+        try:
+            decoded = raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+
+        if fallback_text is None:
+            fallback_text = decoded
+
+        normalized_preview = unicodedata.normalize(
+            "NFKC",
+            decoded[:2000],
+        )
+
+        # EDINET CSVの代表的なヘッダーが確認できたものを採用する。
+        if (
+            "\t" in normalized_preview
+            and (
+                "要素ID" in normalized_preview
+                or "項目名" in normalized_preview
+                or "コンテキストID" in normalized_preview
+            )
+        ):
+            return decoded
+
+    if fallback_text is not None:
+        return fallback_text
+
+    raise RuntimeError(
+        "EDINET CSVの文字コードを判定できませんでした。"
+    )
+
+
+def parse_edinet_csv_zip(
+    zip_bytes: bytes,
+) -> list[dict[str, str]]:
     facts: list[dict[str, str]] = []
 
-    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as archive:
+    # EDINET type=5 CSVの標準的な列順。
+    #
+    # ヘッダー名に予期しない表記揺れがあった場合でも、
+    # 公式CSVの列順から値を復元できるようにする。
+    standard_columns = [
+        "要素ID",
+        "項目名",
+        "コンテキストID",
+        "相対年度",
+        "連結・個別",
+        "期間・時点",
+        "ユニットID",
+        "単位",
+        "値",
+    ]
+
+    with zipfile.ZipFile(
+        io.BytesIO(zip_bytes)
+    ) as archive:
         # ====================================================
-        # ZIP内の財務CSVをすべて対象にする
-        #
-        # jpcrp:
-        #   有価証券報告書固有項目・経営指標等
-        #
-        # jppfs:
-        #   日本基準の財務諸表
-        #
-        # jpigp:
-        #   IFRS関連
-        #
-        # jpaud:
-        #   監査関連のため除外
+        # ZIP内の解析対象CSVを取得
         # ====================================================
 
         csv_files = []
 
-        for name in archive.namelist():
-            lower_name = name.lower()
+        for filename in archive.namelist():
+            lower_filename = filename.lower()
 
-            if not lower_name.endswith(".csv"):
+            if not lower_filename.endswith(".csv"):
                 continue
 
-            if "jpaud" in lower_name:
+            # 監査関連CSVは財務数値抽出の対象外。
+            if "jpaud" in lower_filename:
                 continue
 
-            csv_files.append(name)
+            csv_files.append(filename)
 
         if not csv_files:
             raise RuntimeError(
@@ -1276,110 +1423,227 @@ def parse_edinet_csv_zip(zip_bytes: bytes) -> list[dict[str, str]]:
             f"解析対象CSV: {len(csv_files)}ファイル"
         )
 
+        # ====================================================
+        # CSVファイル単位で読み込み
+        # ====================================================
+
         for filename in csv_files:
             raw = archive.read(filename)
+            decoded = decode_edinet_csv(raw)
 
-            decoded = None
+            # newline=""を指定し、引用符内の改行を
+            # csv.readerに正しく処理させる。
+            reader = csv.reader(
+                io.StringIO(
+                    decoded,
+                    newline="",
+                ),
+                delimiter="\t",
+                quotechar='"',
+                doublequote=True,
+            )
 
-            for encoding in [
-                "utf-16le",
-                "utf-16",
-                "utf-8-sig",
-                "utf-8",
-            ]:
-                try:
-                    decoded = raw.decode(encoding)
-                    break
-                except UnicodeDecodeError:
-                    continue
-
-            if decoded is None:
+            try:
+                raw_headers = next(reader)
+            except StopIteration:
                 print(
-                    f"文字コードを判定できないためスキップ: "
-                    f"{filename}"
+                    f"空のCSVのためスキップ: {filename}"
                 )
                 continue
 
-            reader = csv.DictReader(
-                io.StringIO(decoded),
-                delimiter="\t",
-            )
-
-            # =================================================
-            # CSVヘッダーをNFKC正規化
-            #
-            # 「要素ＩＤ」のような全角英字を
-            # 「要素ID」へ統一する。
-            # =================================================
-
-            normalized_field_names = [
-                unicodedata.normalize(
-                    "NFKC",
-                    normalize_text(field_name),
-                )
-                for field_name in (
-                    reader.fieldnames or []
-                )
+            normalized_headers = [
+                normalize_edinet_csv_header(header)
+                for header in raw_headers
             ]
 
             print(
                 f"CSVヘッダー: "
-                f"{normalized_field_names}"
+                f"{normalized_headers}"
             )
 
+            # ヘッダー名が9列すべて正しく認識されたか確認する。
+            missing_headers = [
+                header
+                for header in standard_columns
+                if header not in normalized_headers
+            ]
+
+            if missing_headers:
+                print(
+                    f"CSVヘッダー警告: "
+                    f"file={filename}, "
+                    f"不足={missing_headers}, "
+                    f"raw_headers={raw_headers}"
+                )
+
             file_fact_count = 0
+            first_element_id = ""
 
-            for row in reader:
-                normalized_row = {}
+            for raw_values in reader:
+                if not raw_values:
+                    continue
 
-                for key, value in row.items():
-                    if key is None:
+                # 列数がヘッダー数より少ない場合は空文字で補完する。
+                padded_values = raw_values + [""] * max(
+                    0,
+                    len(normalized_headers) - len(raw_values),
+                )
+
+                normalized_row: dict[str, str] = {}
+
+                # =================================================
+                # 正規化したヘッダー名で行データを作成
+                # =================================================
+
+                for column_index, header in enumerate(
+                    normalized_headers
+                ):
+                    if not header:
                         continue
 
-                    normalized_key = unicodedata.normalize(
-                        "NFKC",
-                        normalize_text(key),
-                    )
+                    value = ""
 
-                    normalized_row[normalized_key] = (
-                        normalize_text(value)
-                    )
-
-                # =============================================
-                # 表記揺れを標準キーへ統一
-                # =============================================
-
-                header_aliases = {
-                    "要素Id": "要素ID",
-                    "要素id": "要素ID",
-                    "ElementID": "Element ID",
-                    "コンテキストId": "コンテキストID",
-                    "コンテキストid": "コンテキストID",
-                    "ユニットId": "ユニットID",
-                    "ユニットid": "ユニットID",
-                }
-
-                for source_key, destination_key in (
-                    header_aliases.items()
-                ):
-                    if (
-                        destination_key
-                        not in normalized_row
-                        and source_key in normalized_row
-                    ):
-                        normalized_row[destination_key] = (
-                            normalized_row[source_key]
+                    if column_index < len(padded_values):
+                        value = normalize_text(
+                            padded_values[column_index]
                         )
+
+                    normalized_row[header] = value
+
+                # =================================================
+                # 公式CSVの列順によるフォールバック
+                #
+                # ヘッダーに不可視文字などが残っていても、
+                # 先頭列の要素IDを確実に取得する。
+                # =================================================
+
+                for column_index, standard_column in enumerate(
+                    standard_columns
+                ):
+                    existing_value = normalize_text(
+                        normalized_row.get(
+                            standard_column,
+                            "",
+                        )
+                    )
+
+                    if existing_value:
+                        continue
+
+                    if column_index >= len(raw_values):
+                        continue
+
+                    normalized_row[standard_column] = (
+                        normalize_text(
+                            raw_values[column_index]
+                        )
+                    )
+
+                # =================================================
+                # 英語の統一キーも明示的に設定
+                #
+                # 現在の後段処理は日本語キーも参照しているが、
+                # 診断処理や将来の修正でキーがずれないよう、
+                # 両方を必ず保持する。
+                # =================================================
+
+                normalized_row["element_id"] = (
+                    normalized_row.get(
+                        "要素ID",
+                        "",
+                    )
+                )
+
+                normalized_row["label"] = (
+                    normalized_row.get(
+                        "項目名",
+                        "",
+                    )
+                )
+
+                normalized_row["context_id"] = (
+                    normalized_row.get(
+                        "コンテキストID",
+                        "",
+                    )
+                )
+
+                normalized_row["relative_year"] = (
+                    normalized_row.get(
+                        "相対年度",
+                        "",
+                    )
+                )
+
+                normalized_row[
+                    "consolidated_or_nonconsolidated"
+                ] = normalized_row.get(
+                    "連結・個別",
+                    "",
+                )
+
+                normalized_row["period_type"] = (
+                    normalized_row.get(
+                        "期間・時点",
+                        "",
+                    )
+                )
+
+                normalized_row["unit_id"] = (
+                    normalized_row.get(
+                        "ユニットID",
+                        "",
+                    )
+                )
+
+                normalized_row["unit"] = (
+                    normalized_row.get(
+                        "単位",
+                        "",
+                    )
+                )
+
+                normalized_row["value"] = (
+                    normalized_row.get(
+                        "値",
+                        "",
+                    )
+                )
 
                 normalized_row["_source_file"] = filename
 
                 facts.append(normalized_row)
                 file_fact_count += 1
 
+                if (
+                    not first_element_id
+                    and normalized_row["element_id"]
+                ):
+                    first_element_id = (
+                        normalized_row["element_id"]
+                    )
+
+            # =================================================
+            # ファイル単位の要素ID取得確認
+            # =================================================
+
             print(
                 f"CSV読込: {filename} "
                 f"({file_fact_count:,}行)"
             )
+
+            if first_element_id:
+                print(
+                    f"要素ID取得確認: "
+                    f"file={filename}, "
+                    f"element_id={first_element_id}"
+                )
+            else:
+                print(
+                    f"要素ID取得失敗: "
+                    f"file={filename}, "
+                    f"headers={normalized_headers}"
+                )
 
     if not facts:
         raise RuntimeError(
