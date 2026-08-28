@@ -297,25 +297,36 @@ METRIC_DEFINITIONS = {
         "element_ids": [
             "BasicEarningsLossPerShare",
             "BasicEarningsLossPerShareIFRS",
+            "BasicEarningsLossPerShareSummaryOfBusinessResults",
+            "BasicEarningsLossPerShareIFRSSummaryOfBusinessResults",
         ],
         "labels": [
             "1株当たり当期純利益",
+            "１株当たり当期純利益",
             "基本的1株当たり当期利益",
+            "基本的１株当たり当期利益",
             "基本的1株当たり当期利益（△損失）（IFRS）",
+            "基本的１株当たり当期利益（△損失）（IFRS）",
         ],
         "kind": "number",
+        "expected_unit": "per_share",
         "prefer_consolidated": True,
     },
     "bps": {
         "element_ids": [
             "NetAssetsPerShare",
+            "NetAssetsPerShareSummaryOfBusinessResults",
             "EquityAttributableToOwnersOfParentPerShareIFRS",
+            "EquityAttributableToOwnersOfParentPerShareIFRSSummaryOfBusinessResults",
         ],
         "labels": [
             "1株当たり純資産額",
+            "１株当たり純資産額",
             "1株当たり親会社所有者帰属持分",
+            "１株当たり親会社所有者帰属持分",
         ],
         "kind": "number",
+        "expected_unit": "per_share",
         "prefer_consolidated": True,
     },
     "dividend_per_share": {
@@ -326,10 +337,12 @@ METRIC_DEFINITIONS = {
         ],
         "labels": [
             "1株当たり配当額",
+            "１株当たり配当額",
             "年間配当金",
             "年間配当額",
         ],
         "kind": "number",
+        "expected_unit": "per_share",
         "prefer_consolidated": False,
     },
     "shares_issued": {
@@ -343,6 +356,7 @@ METRIC_DEFINITIONS = {
             "期末発行済株式数",
         ],
         "kind": "number",
+        "expected_unit": "shares",
         "prefer_consolidated": False,
     },
 }
@@ -1083,6 +1097,183 @@ def score_fact(
 
     return score
 
+# ============================================================
+# 財務項目と単位の厳密な一致判定
+# ============================================================
+
+def normalize_matching_text(value: Any) -> str:
+    """
+    財務項目名の比較用に、全角・半角の数字差や空白差を吸収する。
+    """
+    text = normalize_text(value)
+
+    translation_table = str.maketrans(
+        {
+            "０": "0",
+            "１": "1",
+            "２": "2",
+            "３": "3",
+            "４": "4",
+            "５": "5",
+            "６": "6",
+            "７": "7",
+            "８": "8",
+            "９": "9",
+            "（": "(",
+            "）": ")",
+            "／": "/",
+        }
+    )
+
+    return (
+        text.translate(translation_table)
+        .replace(" ", "")
+        .replace("\t", "")
+        .strip()
+    )
+
+
+def fact_matches_definition(
+    fact: dict[str, str],
+    definition: dict[str, Any],
+) -> bool:
+    """
+    要素IDまたは項目名が対象財務項目に一致するか判定する。
+
+    コンテキストや相対年度が当期というだけでは一致としない。
+    """
+    element_id = get_fact_value(
+        fact,
+        [
+            "要素ID",
+            "element_id",
+            "Element ID",
+        ],
+    )
+
+    label = get_fact_value(
+        fact,
+        [
+            "項目名",
+            "ラベル",
+            "item_name",
+        ],
+    )
+
+    element_suffix = element_id.split(":")[-1]
+
+    if element_suffix in definition.get("element_ids", []):
+        return True
+
+    normalized_label = normalize_matching_text(label)
+
+    normalized_candidate_labels = {
+        normalize_matching_text(candidate)
+        for candidate in definition.get("labels", [])
+    }
+
+    if normalized_label in normalized_candidate_labels:
+        return True
+
+    return False
+
+
+def fact_matches_expected_unit(
+    fact: dict[str, str],
+    definition: dict[str, Any],
+) -> bool:
+    """
+    1株当たり項目、株式数、金額の単位を検証する。
+
+    単位情報が存在する場合は厳密に確認する。
+    単位情報自体が存在しない場合は、要素ID・項目名の一致を優先する。
+    """
+    expected_unit = definition.get("expected_unit")
+
+    if not expected_unit:
+        return True
+
+    unit_id = get_fact_value(
+        fact,
+        [
+            "ユニットID",
+            "unit_id",
+            "Unit ID",
+        ],
+    )
+
+    displayed_unit = get_fact_value(
+        fact,
+        [
+            "単位",
+            "unit",
+            "Unit",
+        ],
+    )
+
+    combined_unit = normalize_matching_text(
+        f"{unit_id} {displayed_unit}"
+    ).lower()
+
+    if not combined_unit:
+        return True
+
+    if expected_unit == "per_share":
+        per_share_markers = [
+            "jpypershares",
+            "jpy_per_shares",
+            "jpy/share",
+            "円/株",
+            "円・銭",
+        ]
+
+        return any(
+            marker in combined_unit
+            for marker in per_share_markers
+        )
+
+    if expected_unit == "shares":
+        share_markers = [
+            "shares",
+            "share",
+            "株",
+        ]
+
+        return any(
+            marker in combined_unit
+            for marker in share_markers
+        )
+
+    return True
+
+
+def fact_value_is_reasonable(
+    value: float,
+    definition: dict[str, Any],
+) -> bool:
+    """
+    明らかに異常な桁の値を除外する。
+
+    上限だけで正誤を決めるのではなく、
+    要素ID・項目名・単位の一致後の最終安全装置として使用する。
+    """
+    expected_unit = definition.get("expected_unit")
+
+    if expected_unit == "per_share":
+        # EPS・BPS・1株配当が1億円単位になることは通常想定されない。
+        if abs(value) > 10_000_000:
+            return False
+
+    if expected_unit == "shares":
+        if value < 0:
+            return False
+
+    return True
+
+
+# ============================================================
+# 財務項目の抽出
+# ============================================================
 
 def extract_metric(
     facts: list[dict[str, str]],
@@ -1091,17 +1282,37 @@ def extract_metric(
     candidates = []
 
     for fact in facts:
-        value_text = get_fact_value(
-            fact,
-            ["値", "value", "Value"],
-        )
+        # ====================================================
+        # 最重要:
+        # 要素IDまたは項目名が一致しない行は候補にしない
+        # ====================================================
 
-        if not value_text:
+        if not fact_matches_definition(
+            fact,
+            definition,
+        ):
             continue
 
-        score = score_fact(fact, definition)
+        # ====================================================
+        # 1株当たり項目・株式数の単位を検証
+        # ====================================================
 
-        if score <= 0:
+        if not fact_matches_expected_unit(
+            fact,
+            definition,
+        ):
+            continue
+
+        value_text = get_fact_value(
+            fact,
+            [
+                "値",
+                "value",
+                "Value",
+            ],
+        )
+
+        if value_text == "":
             continue
 
         if definition["kind"] == "text":
@@ -1112,27 +1323,61 @@ def extract_metric(
             if parsed_value is None:
                 continue
 
+            if not fact_value_is_reasonable(
+                parsed_value,
+                definition,
+            ):
+                continue
+
+        score = score_fact(
+            fact,
+            definition,
+        )
+
         candidates.append(
             {
                 "score": score,
                 "value": parsed_value,
                 "element_id": get_fact_value(
                     fact,
-                    ["要素ID", "element_id"],
+                    [
+                        "要素ID",
+                        "element_id",
+                    ],
                 ),
                 "label": get_fact_value(
                     fact,
-                    ["項目名", "ラベル", "item_name"],
+                    [
+                        "項目名",
+                        "ラベル",
+                        "item_name",
+                    ],
                 ),
                 "context_id": get_fact_value(
                     fact,
-                    ["コンテキストID", "context_id"],
+                    [
+                        "コンテキストID",
+                        "context_id",
+                    ],
+                ),
+                "unit_id": get_fact_value(
+                    fact,
+                    [
+                        "ユニットID",
+                        "unit_id",
+                    ],
                 ),
                 "unit": get_fact_value(
                     fact,
-                    ["単位", "ユニットID", "unit"],
+                    [
+                        "単位",
+                        "unit",
+                    ],
                 ),
-                "source_file": fact.get("_source_file", ""),
+                "source_file": fact.get(
+                    "_source_file",
+                    "",
+                ),
             }
         )
 
@@ -1145,6 +1390,7 @@ def extract_metric(
     )
 
     return candidates[0]
+
 
 
 def extract_financial_metrics(
