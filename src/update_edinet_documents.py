@@ -169,6 +169,48 @@ def get_lookback_days() -> int:
 
     return lookback_days
 
+def get_target_end_date() -> date:
+    """
+    EDINET取得期間の終了日を環境変数から取得する。
+
+    EDINET_END_DATEが未設定の場合は、
+    日本時間の当日を終了日とする。
+    """
+
+    raw_value = os.getenv(
+        "EDINET_END_DATE",
+        "",
+    ).strip()
+
+    today = datetime.now(
+        JST
+    ).date()
+
+    if not raw_value:
+        return today
+
+    try:
+        target_end_date = date.fromisoformat(
+            raw_value
+        )
+
+    except ValueError as error:
+        raise RuntimeError(
+            "EDINET_END_DATEは"
+            "YYYY-MM-DD形式で指定してください。"
+            f"指定値: {raw_value}"
+        ) from error
+
+    if target_end_date > today:
+        raise RuntimeError(
+            "EDINET_END_DATEに未来日は"
+            "指定できません。"
+            f"指定値: {target_end_date}, "
+            f"現在日: {today}"
+        )
+
+    return target_end_date
+
 
 # ============================================================
 # HTTP
@@ -713,15 +755,16 @@ def download_edinet_code_map(
 
 def build_target_dates(
     lookback_days: int,
+    target_end_date: date,
 ) -> list[date]:
     """
-    取得対象日を作成する。
+    指定された終了日を基準に取得対象日を作成する。
+
+    日数には終了日を含む。
     """
 
-    end_date = datetime.now(JST).date()
-
     start_date = (
-        end_date
+        target_end_date
         - timedelta(days=lookback_days - 1)
     )
 
@@ -729,6 +772,7 @@ def build_target_dates(
         start_date + timedelta(days=offset)
         for offset in range(lookback_days)
     ]
+
 
 
 def fetch_edinet_documents_for_date(
@@ -1831,9 +1875,23 @@ def main() -> None:
 
     lookback_days = get_lookback_days()
 
+    target_end_date = get_target_end_date()
+
+    target_dates = build_target_dates(
+        lookback_days,
+        target_end_date,
+    )
+
+    if not target_dates:
+        raise RuntimeError(
+            "EDINET取得対象日がありません。"
+        )
+
     print(
         "EDINET取得期間を設定しました。"
-        f"直近{lookback_days}日"
+        f"開始日: {target_dates[0]}, "
+        f"終了日: {target_dates[-1]}, "
+        f"日数: {len(target_dates):,}"
     )
 
     sheets_service = create_google_sheets_service()
@@ -1865,10 +1923,6 @@ def main() -> None:
 
     edinet_code_map = download_edinet_code_map(
         session
-    )
-
-    target_dates = build_target_dates(
-        lookback_days
     )
 
     documents = fetch_target_documents(
@@ -1919,6 +1973,8 @@ def main() -> None:
 
     print(
         "EDINET書類一覧の更新が完了しました。"
+        f"取得期間: "
+        f"{target_dates[0]}～{target_dates[-1]}, "
         f"新着: {len(new_rows):,}件, "
         f"PostgreSQL保存確認: "
         f"{database_count:,}件"
@@ -1926,61 +1982,47 @@ def main() -> None:
 
     if not new_rows:
         print(
-            "新着書類がないため、"
-            "Discord通知を省略します。"
+            "新着のEDINET書類はありません。"
         )
         return
 
-    type_counts = count_by_document_type(
+    document_counts = count_by_document_type(
         new_rows
     )
+
+    summary_lines = [
+        (
+            f"取得期間: "
+            f"{target_dates[0]}～{target_dates[-1]}"
+        ),
+        f"新着合計: {len(new_rows):,}件",
+    ]
+
+    for document_type, count in (
+        document_counts.items()
+    ):
+        summary_lines.append(
+            f"{document_type}: {count:,}件"
+        )
 
     preview = create_new_document_preview(
         new_rows
     )
 
-    description_lines = [
-        "EDINETから新着書類を取得しました。",
-        "",
-        f"**取得対象:** 直近{lookback_days}日",
-        f"**新着:** {len(new_rows):,}件",
-        (
-            "**有価証券報告書:** "
-            f"{type_counts['有価証券報告書']:,}件"
-        ),
-        (
-            "**訂正有価証券報告書:** "
-            f"{type_counts['訂正有価証券報告書']:,}件"
-        ),
-        (
-            "**半期報告書:** "
-            f"{type_counts['半期報告書']:,}件"
-        ),
-        (
-            "**訂正半期報告書:** "
-            f"{type_counts['訂正半期報告書']:,}件"
-        ),
-        f"**保存総数:** {len(merged_rows):,}件",
-        (
-            "**PostgreSQL保存確認:** "
-            f"{database_count:,}件"
-        ),
-        "",
-        "**新着書類:**",
-        preview,
-        "",
-        (
-            f"**更新先:** PostgreSQL / "
-            f"`{EDINET_SHEET_NAME}`"
-        ),
-        "**データ出典:** 金融庁EDINET API",
-    ]
+    if preview:
+        summary_lines.extend(
+            [
+                "",
+                preview,
+            ]
+        )
 
     send_discord_notification(
-        "📄 EDINET新着書類",
-        "\n".join(description_lines),
+        "EDINET書類一覧を更新しました",
+        "\n".join(summary_lines),
         success=True,
     )
+
 
 
 # ============================================================
