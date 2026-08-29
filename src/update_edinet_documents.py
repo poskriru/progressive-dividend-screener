@@ -39,6 +39,8 @@ from googleapiclient.discovery import build
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+from database import create_database_connection
+
 
 # ============================================================
 # 定数
