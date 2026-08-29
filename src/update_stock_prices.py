@@ -22,7 +22,8 @@ import os
 import re
 import sys
 import traceback
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+from decimal import Decimal, InvalidOperation
 from typing import Any
 from urllib.parse import urljoin
 from zoneinfo import ZoneInfo
@@ -37,6 +38,13 @@ import requests
 from bs4 import BeautifulSoup
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
+
+
+# ============================================================
+# プロジェクト内モジュール
+# ============================================================
+
+from database import create_database_connection
 
 
 # ============================================================
@@ -66,7 +74,16 @@ USER_AGENT = (
 )
 
 MINIMUM_PARSED_RECORDS = 3000
+MINIMUM_DATABASE_PRICE_RECORDS = 3000
 MINIMUM_MATCH_RATE = 0.80
+
+DATABASE_APPLICATION_NAME = (
+    "progressive-dividend-screener-stock-prices"
+)
+
+DATABASE_PRICE_SOURCE = (
+    "JPX東京証券取引所日報"
+)
 
 PDF_REFERENCE_WIDTH = 1191.0
 PDF_REFERENCE_HEIGHT = 842.0
@@ -1105,6 +1122,582 @@ def create_price_rows(
 
     return headers, rows, matched_count
 
+# ============================================================
+# PostgreSQL保存
+# ============================================================
+
+def parse_database_date(
+    value: Any,
+) -> date:
+    """
+    PostgreSQLへ保存する日付へ変換する。
+    """
+
+    if isinstance(value, datetime):
+        return value.date()
+
+    if isinstance(value, date):
+        return value
+
+    text = str(value).strip()
+
+    if not text:
+        raise RuntimeError(
+            "PostgreSQLへ保存する日付が空です。"
+        )
+
+    try:
+        return date.fromisoformat(text)
+
+    except ValueError as error:
+        raise RuntimeError(
+            "日付をYYYY-MM-DD形式として"
+            "読み込めません。"
+            f"値={text}"
+        ) from error
+
+
+def parse_database_datetime(
+    value: Any,
+) -> datetime:
+    """
+    PostgreSQLへ保存する日時へ変換する。
+
+    タイムゾーンがない場合は日本時間として扱う。
+    """
+
+    if isinstance(value, datetime):
+        parsed_datetime = value
+    else:
+        text = str(value).strip()
+
+        if not text:
+            raise RuntimeError(
+                "PostgreSQLへ保存する日時が空です。"
+            )
+
+        try:
+            parsed_datetime = datetime.fromisoformat(
+                text
+            )
+
+        except ValueError as error:
+            raise RuntimeError(
+                "日時を読み込めません。"
+                f"値={text}"
+            ) from error
+
+    if parsed_datetime.tzinfo is None:
+        parsed_datetime = parsed_datetime.replace(
+            tzinfo=JST
+        )
+
+    return parsed_datetime
+
+
+def parse_database_number(
+    value: Any,
+) -> Decimal | None:
+    """
+    PostgreSQLのnumeric型へ保存する数値へ変換する。
+
+    空文字およびNoneはNULLとして扱う。
+    """
+
+    if value in ("", None):
+        return None
+
+    if isinstance(value, bool):
+        raise RuntimeError(
+            "数値列に真偽値が含まれています。"
+            f"値={value}"
+        )
+
+    text = str(value).strip().replace(",", "")
+
+    if not text:
+        return None
+
+    try:
+        number = Decimal(text)
+
+    except InvalidOperation as error:
+        raise RuntimeError(
+            "PostgreSQLへ保存する数値を"
+            "読み込めません。"
+            f"値={text}"
+        ) from error
+
+    if not number.is_finite():
+        raise RuntimeError(
+            "有限値ではない数値が含まれています。"
+            f"値={text}"
+        )
+
+    return number
+
+
+def build_price_database_records(
+    headers: list[str],
+    rows: list[list[Any]],
+) -> list[tuple[Any, ...]]:
+    """
+    スプレッドシート出力用の株価データを、
+    PostgreSQL保存用レコードへ変換する。
+    """
+
+    required_headers = [
+        "更新日時",
+        "株価基準日",
+        "証券コード",
+        "売買単位",
+        "始値",
+        "高値",
+        "安値",
+        "終値",
+        "前日終値",
+        "前日比",
+        "騰落率（%）",
+        "最終気配",
+        "VWAP",
+        "出来高",
+        "売買代金（千円）",
+        "株価取得状態",
+        "データ出典",
+        "出典URL",
+    ]
+
+    missing_headers = [
+        header
+        for header in required_headers
+        if header not in headers
+    ]
+
+    if missing_headers:
+        raise RuntimeError(
+            "PostgreSQL保存に必要な株価列が"
+            "ありません。"
+            f"不足列: {missing_headers}"
+        )
+
+    header_indexes = {
+        header: headers.index(header)
+        for header in required_headers
+    }
+
+    records: list[tuple[Any, ...]] = []
+    record_keys: set[tuple[str, date, str]] = set()
+
+    for row_number, row in enumerate(
+        rows,
+        start=2,
+    ):
+        def get_value(header: str) -> Any:
+            index = header_indexes[header]
+
+            if index >= len(row):
+                return ""
+
+            return row[index]
+
+        security_code = normalize_security_code(
+            get_value("証券コード")
+        )
+
+        if not security_code:
+            raise RuntimeError(
+                "証券コードが空の株価行があります。"
+                f"行番号: {row_number}"
+            )
+
+        trading_date = parse_database_date(
+            get_value("株価基準日")
+        )
+
+        source = str(
+            get_value("データ出典")
+        ).strip()
+
+        if source != DATABASE_PRICE_SOURCE:
+            raise RuntimeError(
+                "想定外の株価データ出典です。"
+                f"行番号: {row_number}, "
+                f"データ出典: {source}"
+            )
+
+        record_key = (
+            security_code,
+            trading_date,
+            source,
+        )
+
+        if record_key in record_keys:
+            raise RuntimeError(
+                "PostgreSQL保存対象の株価が"
+                "重複しています。"
+                f"証券コード: {security_code}, "
+                f"株価基準日: {trading_date}, "
+                f"データ出典: {source}"
+            )
+
+        record_keys.add(record_key)
+
+        records.append(
+            (
+                security_code,
+                trading_date,
+                parse_database_number(
+                    get_value("売買単位")
+                ),
+                parse_database_number(
+                    get_value("始値")
+                ),
+                parse_database_number(
+                    get_value("高値")
+                ),
+                parse_database_number(
+                    get_value("安値")
+                ),
+                parse_database_number(
+                    get_value("終値")
+                ),
+                parse_database_number(
+                    get_value("前日終値")
+                ),
+                parse_database_number(
+                    get_value("前日比")
+                ),
+                parse_database_number(
+                    get_value("騰落率（%）")
+                ),
+                parse_database_number(
+                    get_value("最終気配")
+                ),
+                parse_database_number(
+                    get_value("VWAP")
+                ),
+                parse_database_number(
+                    get_value("出来高")
+                ),
+                parse_database_number(
+                    get_value("売買代金（千円）")
+                ),
+                str(
+                    get_value("株価取得状態")
+                ).strip(),
+                source,
+                str(
+                    get_value("出典URL")
+                ).strip(),
+                parse_database_datetime(
+                    get_value("更新日時")
+                ),
+            )
+        )
+
+    if len(records) < MINIMUM_DATABASE_PRICE_RECORDS:
+        raise RuntimeError(
+            "PostgreSQLへ保存する株価件数が"
+            "少なすぎます。"
+            f"保存対象: {len(records):,}件"
+        )
+
+    return records
+
+
+def get_database_price_count(
+    trading_date: str,
+) -> int:
+    """
+    指定した株価基準日のJPX株価件数を取得する。
+    """
+
+    parsed_trading_date = parse_database_date(
+        trading_date
+    )
+
+    with create_database_connection(
+        DATABASE_APPLICATION_NAME
+    ) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT count(*) AS record_count
+                FROM screener.daily_prices
+                WHERE trading_date = %s
+                  AND source = %s
+                """,
+                (
+                    parsed_trading_date,
+                    DATABASE_PRICE_SOURCE,
+                ),
+            )
+
+            result = cursor.fetchone()
+
+    if result is None:
+        raise RuntimeError(
+            "PostgreSQLから株価件数を"
+            "取得できませんでした。"
+        )
+
+    return int(result["record_count"])
+
+
+def save_prices_to_database(
+    headers: list[str],
+    rows: list[list[Any]],
+) -> dict[str, int]:
+    """
+    JPXの最新株価をPostgreSQLへ保存する。
+
+    証券コード・株価基準日・データ出典が
+    同じレコードはUPSERTする。
+    """
+
+    records = build_price_database_records(
+        headers,
+        rows,
+    )
+
+    expected_trading_dates = {
+        record[1]
+        for record in records
+    }
+
+    if len(expected_trading_dates) != 1:
+        raise RuntimeError(
+            "複数の株価基準日が混在しています。"
+            f"株価基準日: {sorted(expected_trading_dates)}"
+        )
+
+    trading_date = next(
+        iter(expected_trading_dates)
+    )
+
+    print(
+        "PostgreSQLへ最新株価を保存します。"
+        f"株価基準日: {trading_date}, "
+        f"保存対象: {len(records):,}件"
+    )
+
+    with create_database_connection(
+        DATABASE_APPLICATION_NAME
+    ) as connection:
+        with connection.transaction():
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    CREATE TEMP TABLE daily_prices_sync (
+                        security_code text NOT NULL,
+                        trading_date date NOT NULL,
+                        trading_unit numeric(20, 6),
+                        open_price numeric(20, 6),
+                        high_price numeric(20, 6),
+                        low_price numeric(20, 6),
+                        close_price numeric(20, 6),
+                        previous_close numeric(20, 6),
+                        price_change numeric(20, 6),
+                        change_rate_percent numeric(20, 6),
+                        final_quote numeric(20, 6),
+                        vwap numeric(20, 6),
+                        volume numeric(28, 6),
+                        turnover_thousand_yen numeric(28, 6),
+                        price_status text,
+                        source text NOT NULL,
+                        source_url text,
+                        source_updated_at timestamptz
+                    )
+                    ON COMMIT DROP
+                    """
+                )
+
+                with cursor.copy(
+                    """
+                    COPY daily_prices_sync (
+                        security_code,
+                        trading_date,
+                        trading_unit,
+                        open_price,
+                        high_price,
+                        low_price,
+                        close_price,
+                        previous_close,
+                        price_change,
+                        change_rate_percent,
+                        final_quote,
+                        vwap,
+                        volume,
+                        turnover_thousand_yen,
+                        price_status,
+                        source,
+                        source_url,
+                        source_updated_at
+                    )
+                    FROM STDIN
+                    """
+                ) as copy:
+                    for record in records:
+                        copy.write_row(record)
+
+                cursor.execute(
+                    """
+                    INSERT INTO screener.daily_prices (
+                        security_code,
+                        trading_date,
+                        trading_unit,
+                        open_price,
+                        high_price,
+                        low_price,
+                        close_price,
+                        previous_close,
+                        price_change,
+                        change_rate_percent,
+                        final_quote,
+                        vwap,
+                        volume,
+                        turnover_thousand_yen,
+                        adjustment_factor,
+                        adjusted_close_price,
+                        price_status,
+                        source,
+                        source_url,
+                        source_updated_at,
+                        fetched_at
+                    )
+                    SELECT
+                        security_code,
+                        trading_date,
+                        trading_unit,
+                        open_price,
+                        high_price,
+                        low_price,
+                        close_price,
+                        previous_close,
+                        price_change,
+                        change_rate_percent,
+                        final_quote,
+                        vwap,
+                        volume,
+                        turnover_thousand_yen,
+                        NULL,
+                        NULL,
+                        NULLIF(price_status, ''),
+                        source,
+                        NULLIF(source_url, ''),
+                        source_updated_at,
+                        CURRENT_TIMESTAMP
+                    FROM daily_prices_sync
+                    ON CONFLICT (
+                        security_code,
+                        trading_date,
+                        source
+                    )
+                    DO UPDATE SET
+                        trading_unit = EXCLUDED.trading_unit,
+                        open_price = EXCLUDED.open_price,
+                        high_price = EXCLUDED.high_price,
+                        low_price = EXCLUDED.low_price,
+                        close_price = EXCLUDED.close_price,
+                        previous_close = EXCLUDED.previous_close,
+                        price_change = EXCLUDED.price_change,
+                        change_rate_percent = (
+                            EXCLUDED.change_rate_percent
+                        ),
+                        final_quote = EXCLUDED.final_quote,
+                        vwap = EXCLUDED.vwap,
+                        volume = EXCLUDED.volume,
+                        turnover_thousand_yen = (
+                            EXCLUDED.turnover_thousand_yen
+                        ),
+                        price_status = EXCLUDED.price_status,
+                        source_url = EXCLUDED.source_url,
+                        source_updated_at = (
+                            EXCLUDED.source_updated_at
+                        ),
+                        fetched_at = CURRENT_TIMESTAMP
+                    """
+                )
+
+                cursor.execute(
+                    """
+                    SELECT
+                        count(*) AS current_record_count,
+                        count(*) FILTER (
+                            WHERE price.close_price IS NOT NULL
+                        ) AS close_price_count
+                    FROM screener.daily_prices AS price
+                    INNER JOIN daily_prices_sync AS sync
+                        ON sync.security_code
+                           = price.security_code
+                       AND sync.trading_date
+                           = price.trading_date
+                       AND sync.source
+                           = price.source
+                    """
+                )
+
+                current_result = cursor.fetchone()
+
+                cursor.execute(
+                    """
+                    SELECT count(*) AS date_source_count
+                    FROM screener.daily_prices
+                    WHERE trading_date = %s
+                      AND source = %s
+                    """,
+                    (
+                        trading_date,
+                        DATABASE_PRICE_SOURCE,
+                    ),
+                )
+
+                total_result = cursor.fetchone()
+
+    if current_result is None or total_result is None:
+        raise RuntimeError(
+            "PostgreSQL保存後の株価件数を"
+            "確認できませんでした。"
+        )
+
+    result = {
+        "saved_count": len(records),
+        "current_record_count": int(
+            current_result["current_record_count"]
+        ),
+        "close_price_count": int(
+            current_result["close_price_count"]
+        ),
+        "date_source_count": int(
+            total_result["date_source_count"]
+        ),
+    }
+
+    if result["current_record_count"] != len(records):
+        raise RuntimeError(
+            "PostgreSQLへ保存された株価件数が"
+            "保存対象件数と一致しません。"
+            f"保存対象: {len(records):,}, "
+            "DB確認件数: "
+            f"{result['current_record_count']:,}"
+        )
+
+    print("PostgreSQLへの株価保存が完了しました。")
+    print(
+        "DB保存確認: "
+        f"{result['current_record_count']:,}件"
+    )
+    print(
+        "DB終値あり: "
+        f"{result['close_price_count']:,}件"
+    )
+    print(
+        "同一基準日・同一出典のDB総数: "
+        f"{result['date_source_count']:,}件"
+    )
+
+    return result
+
 
 # ============================================================
 # 前回基準日取得
@@ -1332,7 +1925,8 @@ def count_close_prices(
 
 def main() -> None:
     """
-    最新株価更新処理を実行する。
+    最新株価をPostgreSQLと
+    Googleスプレッドシートへ保存する。
     """
 
     spreadsheet_id = get_required_environment_variable(
@@ -1352,17 +1946,47 @@ def main() -> None:
         find_latest_stock_quotation_pdf(session)
     )
 
-    existing_date = get_existing_trading_date(
+    existing_sheet_date = get_existing_trading_date(
         sheets_service,
         spreadsheet_id,
     )
 
-    if existing_date == trading_date:
+    existing_database_count = get_database_price_count(
+        trading_date
+    )
+
+    sheet_is_current = (
+        existing_sheet_date == trading_date
+    )
+
+    database_is_current = (
+        existing_database_count
+        == len(stock_master)
+    )
+
+    if sheet_is_current and database_is_current:
         print(
-            "最新株価シートはすでに更新済みです。"
-            f"基準日: {trading_date}"
+            "最新株価はPostgreSQLと"
+            "Googleスプレッドシートの両方で"
+            "更新済みです。"
+        )
+        print(f"株価基準日: {trading_date}")
+        print(
+            "DB登録件数: "
+            f"{existing_database_count:,}件"
         )
         return
+
+    if sheet_is_current and not database_is_current:
+        print(
+            "Googleスプレッドシートは更新済みですが、"
+            "PostgreSQLの件数が一致しないため"
+            "再取得してDBへ保存します。"
+        )
+        print(
+            "DB既存件数: "
+            f"{existing_database_count:,}件"
+        )
 
     pdf_content = download_pdf(
         session,
@@ -1380,6 +2004,15 @@ def main() -> None:
         pdf_url,
     )
 
+    # PostgreSQLを正本候補として先に更新する。
+    # DB更新に失敗した場合は、スプレッドシートを
+    # 更新せず処理を停止する。
+    database_result = save_prices_to_database(
+        headers,
+        rows,
+    )
+
+    # 移行期間中はGoogleスプレッドシートにも保存する。
     write_price_sheet(
         sheets_service,
         spreadsheet_id,
@@ -1396,19 +2029,58 @@ def main() -> None:
         len(stock_master) - matched_count
     )
 
+    if (
+        close_count
+        != database_result["close_price_count"]
+    ):
+        raise RuntimeError(
+            "PostgreSQLとスプレッドシート用データの"
+            "終値件数が一致しません。"
+            f"スプレッドシート用: {close_count:,}, "
+            "PostgreSQL: "
+            f"{database_result['close_price_count']:,}"
+        )
+
     description = "\n".join(
         [
             "JPX東京証券取引所日報から"
             "最新株価を更新しました。",
             "",
             f"**株価基準日:** {trading_date}",
-            f"**銘柄マスター:** {len(stock_master):,}銘柄",
-            f"**相場表一致:** {matched_count:,}銘柄",
-            f"**終値取得:** {close_count:,}銘柄",
-            f"**相場表該当なし:** {missing_count:,}銘柄",
+            (
+                f"**銘柄マスター:** "
+                f"{len(stock_master):,}銘柄"
+            ),
+            (
+                f"**相場表一致:** "
+                f"{matched_count:,}銘柄"
+            ),
+            (
+                f"**終値取得:** "
+                f"{close_count:,}銘柄"
+            ),
+            (
+                f"**相場表該当なし:** "
+                f"{missing_count:,}銘柄"
+            ),
             "",
-            f"**更新先:** `{PRICE_SHEET_NAME}`",
-            "**データ出典:** JPX東京証券取引所日報",
+            (
+                "**DB保存確認:** "
+                f"{database_result['current_record_count']:,}件"
+            ),
+            (
+                "**DB終値あり:** "
+                f"{database_result['close_price_count']:,}件"
+            ),
+            "",
+            (
+                f"**更新先:** "
+                f"`PostgreSQL / {PRICE_SHEET_NAME}`"
+            ),
+            (
+                "**データ出典:** "
+                "JPX東京証券取引所日報"
+            ),
         ]
     )
 
