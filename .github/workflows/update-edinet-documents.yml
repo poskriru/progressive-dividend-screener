@@ -50,6 +50,9 @@ jobs:
     env:
       TZ: Asia/Tokyo
 
+      DATABASE_URL: >-
+        ${{ secrets.DATABASE_URL }}
+
       GOOGLE_SERVICE_ACCOUNT_JSON: >-
         ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
 
@@ -64,6 +67,7 @@ jobs:
 
       EDINET_LOOKBACK_DAYS: >-
         ${{ github.event.inputs.lookback_days || '7' }}
+
 
     steps:
       # ======================================================
