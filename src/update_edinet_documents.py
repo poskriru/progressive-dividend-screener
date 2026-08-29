@@ -59,6 +59,8 @@ EDINET_VIEWER_URL = (
     "https://disclosure2.edinet-fsa.go.jp/"
 )
 
+DATABASE_SOURCE_NAME = "EDINET"
+
 MASTER_SHEET_NAME = "銘柄マスター"
 EDINET_SHEET_NAME = "EDINET書類"
 
@@ -1226,6 +1228,338 @@ def merge_document_rows(
 
     return merged_rows, new_rows
 
+# ============================================================
+# PostgreSQL保存
+# ============================================================
+
+def parse_database_date(
+    value: Any,
+) -> date | None:
+    """
+    スプレッドシートの値をPostgreSQL用の日付へ変換する。
+    """
+
+    text = normalize_value(value)
+
+    if not text:
+        return None
+
+    try:
+        return date.fromisoformat(
+            text[:10]
+        )
+
+    except ValueError as error:
+        raise RuntimeError(
+            "日付を解析できませんでした。"
+            f"値: {text}"
+        ) from error
+
+
+def parse_database_datetime(
+    value: Any,
+) -> datetime | None:
+    """
+    スプレッドシートの値をPostgreSQL用の日時へ変換する。
+
+    タイムゾーンがない日時は、日本時間として扱う。
+    """
+
+    text = normalize_value(value)
+
+    if not text:
+        return None
+
+    normalized_text = text.replace(
+        "Z",
+        "+00:00",
+    )
+
+    try:
+        parsed_value = datetime.fromisoformat(
+            normalized_text
+        )
+
+    except ValueError as error:
+        raise RuntimeError(
+            "日時を解析できませんでした。"
+            f"値: {text}"
+        ) from error
+
+    if parsed_value.tzinfo is None:
+        parsed_value = parsed_value.replace(
+            tzinfo=JST
+        )
+
+    return parsed_value
+
+
+def build_document_database_records(
+    rows: list[list[Any]],
+) -> list[tuple[Any, ...]]:
+    """
+    EDINET書類シート形式の行を、
+    PostgreSQL保存用レコードへ変換する。
+    """
+
+    fetched_at_index = OUTPUT_HEADERS.index(
+        "取得日時"
+    )
+    submitted_at_index = OUTPUT_HEADERS.index(
+        "提出日時"
+    )
+    security_code_index = OUTPUT_HEADERS.index(
+        "証券コード"
+    )
+    filer_name_index = OUTPUT_HEADERS.index(
+        "提出者名"
+    )
+    edinet_code_index = OUTPUT_HEADERS.index(
+        "EDINETコード"
+    )
+    doc_id_index = OUTPUT_HEADERS.index(
+        "書類管理番号"
+    )
+    document_type_name_index = OUTPUT_HEADERS.index(
+        "書類種別"
+    )
+    document_type_code_index = OUTPUT_HEADERS.index(
+        "書類種別コード"
+    )
+    period_start_index = OUTPUT_HEADERS.index(
+        "対象期間開始"
+    )
+    period_end_index = OUTPUT_HEADERS.index(
+        "対象期間終了"
+    )
+    source_url_index = OUTPUT_HEADERS.index(
+        "EDINET閲覧サイト"
+    )
+
+    records: list[tuple[Any, ...]] = []
+    seen_doc_ids: set[str] = set()
+
+    for row_number, original_row in enumerate(
+        rows,
+        start=2,
+    ):
+        row = normalize_sheet_row(
+            original_row,
+            len(OUTPUT_HEADERS),
+        )
+
+        doc_id = normalize_value(
+            row[doc_id_index]
+        )
+
+        if not doc_id:
+            raise RuntimeError(
+                "書類管理番号が空の行があります。"
+                f"シート行: {row_number}"
+            )
+
+        if doc_id in seen_doc_ids:
+            raise RuntimeError(
+                "書類管理番号が重複しています。"
+                f"doc_id: {doc_id}"
+            )
+
+        seen_doc_ids.add(doc_id)
+
+        security_code = normalize_security_code(
+            row[security_code_index]
+        )
+
+        if not security_code:
+            raise RuntimeError(
+                "証券コードが空の行があります。"
+                f"doc_id: {doc_id}"
+            )
+
+        records.append(
+            (
+                doc_id,
+                security_code,
+                normalize_value(
+                    row[edinet_code_index]
+                )
+                or None,
+                normalize_value(
+                    row[filer_name_index]
+                )
+                or None,
+                normalize_value(
+                    row[document_type_code_index]
+                )
+                or None,
+                normalize_value(
+                    row[document_type_name_index]
+                )
+                or None,
+                parse_database_datetime(
+                    row[submitted_at_index]
+                ),
+                parse_database_date(
+                    row[period_start_index]
+                ),
+                parse_database_date(
+                    row[period_end_index]
+                ),
+                DATABASE_SOURCE_NAME,
+                normalize_value(
+                    row[source_url_index]
+                )
+                or EDINET_VIEWER_URL,
+                parse_database_datetime(
+                    row[fetched_at_index]
+                )
+                or datetime.now(JST),
+            )
+        )
+
+    return records
+
+
+def get_saved_document_count(
+    cursor,
+    doc_ids: list[str],
+) -> int:
+    """
+    指定した書類管理番号がDBに何件保存されているか取得する。
+    """
+
+    if not doc_ids:
+        return 0
+
+    cursor.execute(
+        """
+        SELECT COUNT(*)
+        FROM screener.edinet_documents
+        WHERE doc_id = ANY(%s);
+        """,
+        (doc_ids,),
+    )
+
+    result = cursor.fetchone()
+
+    if result is None:
+        return 0
+
+    return int(result[0])
+
+
+def save_documents_to_database(
+    rows: list[list[Any]],
+) -> int:
+    """
+    EDINET書類をPostgreSQLへUPSERTする。
+
+    processing_statusなどの財務解析側で管理する列は、
+    既存値を上書きしない。
+    """
+
+    records = build_document_database_records(
+        rows
+    )
+
+    if not records:
+        print(
+            "PostgreSQLへ保存する"
+            "EDINET書類はありません。"
+        )
+        return 0
+
+    sql = """
+        INSERT INTO screener.edinet_documents (
+            doc_id,
+            security_code,
+            edinet_code,
+            filer_name,
+            document_type_code,
+            document_type_name,
+            submitted_at,
+            period_start,
+            period_end,
+            source,
+            source_url,
+            fetched_at
+        )
+        VALUES (
+            %s,
+            %s,
+            %s,
+            %s,
+            %s,
+            %s,
+            %s,
+            %s,
+            %s,
+            %s,
+            %s,
+            %s
+        )
+        ON CONFLICT (doc_id)
+        DO UPDATE SET
+            security_code = EXCLUDED.security_code,
+            edinet_code = EXCLUDED.edinet_code,
+            filer_name = EXCLUDED.filer_name,
+            document_type_code =
+                EXCLUDED.document_type_code,
+            document_type_name =
+                EXCLUDED.document_type_name,
+            submitted_at = EXCLUDED.submitted_at,
+            period_start = EXCLUDED.period_start,
+            period_end = EXCLUDED.period_end,
+            source = EXCLUDED.source,
+            source_url = EXCLUDED.source_url,
+            fetched_at = EXCLUDED.fetched_at;
+    """
+
+    connection = create_database_connection()
+
+    try:
+        with connection.cursor() as cursor:
+            cursor.executemany(
+                sql,
+                records,
+            )
+
+            doc_ids = [
+                str(record[0])
+                for record in records
+            ]
+
+            saved_count = get_saved_document_count(
+                cursor,
+                doc_ids,
+            )
+
+            expected_count = len(records)
+
+            if saved_count != expected_count:
+                raise RuntimeError(
+                    "PostgreSQL保存後の件数が"
+                    "一致しません。"
+                    f"期待件数: {expected_count:,}, "
+                    f"保存件数: {saved_count:,}"
+                )
+
+        connection.commit()
+
+    except Exception:
+        connection.rollback()
+        raise
+
+    finally:
+        connection.close()
+
+    print(
+        "EDINET書類をPostgreSQLへ保存しました。"
+        f"保存確認件数: {saved_count:,}"
+    )
+
+    return saved_count
+
 
 # ============================================================
 # シート書き込み
@@ -1472,6 +1806,9 @@ def create_new_document_preview(
 def main() -> None:
     """
     EDINET書類一覧更新処理を実行する。
+
+    PostgreSQLへの保存が成功した後に、
+    Googleスプレッドシートを更新する。
     """
 
     spreadsheet_id = get_required_environment_variable(
@@ -1541,6 +1878,28 @@ def main() -> None:
         fetched_rows,
     )
 
+    if len(merged_rows) < existing_count:
+        raise RuntimeError(
+            "統合後のEDINET書類件数が"
+            "既存件数を下回りました。"
+            f"既存件数: {existing_count:,}, "
+            f"統合後件数: {len(merged_rows):,}"
+        )
+
+    # PostgreSQLを本番データとして先に更新する。
+    database_count = save_documents_to_database(
+        merged_rows
+    )
+
+    if database_count != len(merged_rows):
+        raise RuntimeError(
+            "PostgreSQLと統合データの件数が"
+            "一致しません。"
+            f"統合件数: {len(merged_rows):,}, "
+            f"DB件数: {database_count:,}"
+        )
+
+    # DB保存成功後に閲覧用シートを更新する。
     write_edinet_sheet(
         sheets_service,
         spreadsheet_id,
@@ -1550,7 +1909,9 @@ def main() -> None:
 
     print(
         "EDINET書類一覧の更新が完了しました。"
-        f"新着: {len(new_rows):,}件"
+        f"新着: {len(new_rows):,}件, "
+        f"PostgreSQL保存確認: "
+        f"{database_count:,}件"
     )
 
     if not new_rows:
@@ -1590,11 +1951,18 @@ def main() -> None:
             f"{type_counts['訂正半期報告書']:,}件"
         ),
         f"**保存総数:** {len(merged_rows):,}件",
+        (
+            "**PostgreSQL保存確認:** "
+            f"{database_count:,}件"
+        ),
         "",
         "**新着書類:**",
         preview,
         "",
-        f"**更新先:** `{EDINET_SHEET_NAME}`",
+        (
+            f"**更新先:** PostgreSQL / "
+            f"`{EDINET_SHEET_NAME}`"
+        ),
         "**データ出典:** 金融庁EDINET API",
     ]
 
