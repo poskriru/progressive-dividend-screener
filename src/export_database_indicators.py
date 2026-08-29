@@ -11,6 +11,7 @@ PostgreSQLのcompany_screener_base VIEWから
 # ============================================================
 
 import math
+import os
 import sys
 import traceback
 from datetime import date, datetime
@@ -37,9 +38,55 @@ from update_edinet_financials import (
 # 定数
 # ============================================================
 
-DATABASE_INDICATOR_SHEET_NAME = "株式指標_DB比較"
+DEFAULT_DATABASE_INDICATOR_SHEET_NAME = "株式指標_DB比較"
+PRODUCTION_INDICATOR_SHEET_NAME = "株式指標"
+
+INDICATOR_OUTPUT_SHEET_NAME_ENV = (
+    "INDICATOR_OUTPUT_SHEET_NAME"
+)
+
+ALLOWED_INDICATOR_OUTPUT_SHEET_NAMES = {
+    DEFAULT_DATABASE_INDICATOR_SHEET_NAME,
+    PRODUCTION_INDICATOR_SHEET_NAME,
+}
 
 MILLION = Decimal("1000000")
+
+
+# ============================================================
+# 出力先シート名
+# ============================================================
+
+def get_indicator_output_sheet_name() -> str:
+    """
+    PostgreSQL版株式指標の出力先シート名を取得する。
+
+    環境変数が未設定の場合は、既存シートを保護するため
+    比較用シートへ出力する。
+    """
+
+    sheet_name = os.getenv(
+        INDICATOR_OUTPUT_SHEET_NAME_ENV,
+        DEFAULT_DATABASE_INDICATOR_SHEET_NAME,
+    ).strip()
+
+    if not sheet_name:
+        sheet_name = (
+            DEFAULT_DATABASE_INDICATOR_SHEET_NAME
+        )
+
+    if (
+        sheet_name
+        not in ALLOWED_INDICATOR_OUTPUT_SHEET_NAMES
+    ):
+        raise RuntimeError(
+            "株式指標の出力先シート名が不正です。"
+            f"指定値: {sheet_name}, "
+            "許可値: "
+            f"{sorted(ALLOWED_INDICATOR_OUTPUT_SHEET_NAMES)}"
+        )
+
+    return sheet_name
 
 
 # ============================================================
@@ -493,7 +540,7 @@ def build_indicator_rows(
 
 def main() -> None:
     """
-    PostgreSQLの株式指標を比較用シートへ出力する。
+    PostgreSQLの株式指標を指定されたシートへ出力する。
     """
 
     spreadsheet_id = (
@@ -506,6 +553,15 @@ def main() -> None:
         get_required_environment_variable(
             "GOOGLE_SERVICE_ACCOUNT_JSON"
         )
+    )
+
+    output_sheet_name = (
+        get_indicator_output_sheet_name()
+    )
+
+    print(
+        "株式指標の出力先を確認しました。"
+        f"シート: {output_sheet_name}"
     )
 
     sheets_service = (
@@ -523,15 +579,15 @@ def main() -> None:
     write_sheet(
         sheets_service,
         spreadsheet_id,
-        DATABASE_INDICATOR_SHEET_NAME,
+        output_sheet_name,
         INDICATOR_HEADERS,
         indicator_rows,
     )
 
     print(
         "PostgreSQL版株式指標の"
-        "比較用出力が完了しました。"
-        f"シート: {DATABASE_INDICATOR_SHEET_NAME}, "
+        "出力が完了しました。"
+        f"シート: {output_sheet_name}, "
         f"件数: {len(indicator_rows):,}"
     )
 
