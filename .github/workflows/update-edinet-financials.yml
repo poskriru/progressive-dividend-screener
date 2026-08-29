@@ -70,3 +70,12 @@ jobs:
         run: |
           echo "MAX_DOCUMENTS=${MAX_DOCUMENTS}"
           python src/update_edinet_financials.py
+
+      # ======================================================
+      # PostgreSQL版株式指標を本番シートへ出力
+      # ======================================================
+      - name: Export database indicators to production sheet
+        env:
+          INDICATOR_OUTPUT_SHEET_NAME: 株式指標
+        run: |
+          python src/export_database_indicators.py
