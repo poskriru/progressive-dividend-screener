@@ -54,3 +54,10 @@ jobs:
       - name: Export database indicators
         run: |
           python src/export_database_indicators.py
+
+      # ======================================================
+      # 既存株式指標との比較
+      # ======================================================
+      - name: Compare indicator sheets
+        run: |
+          python src/compare_indicator_sheets.py
