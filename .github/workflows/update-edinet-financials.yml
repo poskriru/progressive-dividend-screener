@@ -26,11 +26,25 @@ jobs:
 
     env:
       TZ: Asia/Tokyo
-      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-      GOOGLE_SPREADSHEET_ID: ${{ secrets.GOOGLE_SPREADSHEET_ID }}
-      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-      EDINET_API_KEY: ${{ secrets.EDINET_API_KEY }}
-      MAX_DOCUMENTS: ${{ github.event.inputs.max_documents || '30' }}
+
+      DATABASE_URL: >-
+        ${{ secrets.DATABASE_URL }}
+
+      GOOGLE_SERVICE_ACCOUNT_JSON: >-
+        ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+
+      GOOGLE_SPREADSHEET_ID: >-
+        ${{ secrets.GOOGLE_SPREADSHEET_ID }}
+
+      DISCORD_WEBHOOK_URL: >-
+        ${{ secrets.DISCORD_WEBHOOK_URL }}
+
+      EDINET_API_KEY: >-
+        ${{ secrets.EDINET_API_KEY }}
+
+      MAX_DOCUMENTS: >-
+        ${{ github.event.inputs.max_documents || '30' }}
+
 
     steps:
       # ======================================================
