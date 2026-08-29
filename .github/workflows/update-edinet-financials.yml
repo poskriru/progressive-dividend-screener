@@ -6,7 +6,7 @@ on:
       max_documents:
         description: "1回に処理する最大書類数"
         required: true
-        default: "100"
+        default: "30"
 
   schedule:
     # 毎日 00:30 JST
@@ -27,24 +27,17 @@ jobs:
     env:
       TZ: Asia/Tokyo
 
-      DATABASE_URL: >-
-        ${{ secrets.DATABASE_URL }}
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
 
-      GOOGLE_SERVICE_ACCOUNT_JSON: >-
-        ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
 
-      GOOGLE_SPREADSHEET_ID: >-
-        ${{ secrets.GOOGLE_SPREADSHEET_ID }}
+      GOOGLE_SPREADSHEET_ID: ${{ secrets.GOOGLE_SPREADSHEET_ID }}
 
-      DISCORD_WEBHOOK_URL: >-
-        ${{ secrets.DISCORD_WEBHOOK_URL }}
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
 
-      EDINET_API_KEY: >-
-        ${{ secrets.EDINET_API_KEY }}
+      EDINET_API_KEY: ${{ secrets.EDINET_API_KEY }}
 
-      MAX_DOCUMENTS: >-
-        ${{ github.event.inputs.max_documents || '30' }}
-
+      MAX_DOCUMENTS: ${{ github.event.inputs.max_documents || '30' }}
 
     steps:
       # ======================================================
@@ -75,4 +68,5 @@ jobs:
       # ======================================================
       - name: Update EDINET financials
         run: |
+          echo "MAX_DOCUMENTS=${MAX_DOCUMENTS}"
           python src/update_edinet_financials.py
