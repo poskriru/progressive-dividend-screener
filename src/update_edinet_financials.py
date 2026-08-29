@@ -12,9 +12,18 @@ import zipfile
 from datetime import datetime, timezone, timedelta
 from typing import Any
 
+# ============================================================
+# 外部ライブラリ
+# ============================================================
+
 import requests
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
+
+from migrate_edinet_financials import (
+    build_financial_database_records,
+    save_financials_to_database,
+)
 
 
 # ============================================================
@@ -938,6 +947,100 @@ def rows_to_dicts(values: list[list[str]]) -> list[dict[str, str]]:
 
     return results
 
+# ============================================================
+# PostgreSQL同期
+# ============================================================
+
+def save_financial_sheet_rows_to_database(
+    headers: list[str],
+    rows: list[list[Any]],
+) -> int:
+    """
+    EDINET財務シート形式の行をPostgreSQLへ保存する。
+
+    PostgreSQLへの保存が成功した場合のみ、
+    呼び出し元でGoogle Sheetsの更新を続行する。
+    """
+
+    normalized_headers = [
+        normalize_text(header)
+        for header in headers
+    ]
+
+    financial_rows: list[
+        dict[str, Any]
+    ] = []
+
+    for sheet_row_number, original_row in enumerate(
+        rows,
+        start=2,
+    ):
+        padded_row = list(
+            original_row
+        )
+
+        if len(padded_row) < len(normalized_headers):
+            padded_row.extend(
+                [""] * (
+                    len(normalized_headers)
+                    - len(padded_row)
+                )
+            )
+
+        row = dict(
+            zip(
+                normalized_headers,
+                padded_row,
+            )
+        )
+
+        row["_sheet_row_number"] = (
+            sheet_row_number
+        )
+
+        financial_rows.append(
+            row
+        )
+
+    if not financial_rows:
+        print(
+            "PostgreSQLへ保存する"
+            "EDINET財務情報はありません。"
+        )
+        return 0
+
+    records = build_financial_database_records(
+        financial_rows
+    )
+
+    saved_count = save_financials_to_database(
+        records
+    )
+
+    expected_count = len(
+        financial_rows
+    )
+
+    if saved_count != expected_count:
+        raise RuntimeError(
+            "EDINET財務のPostgreSQL保存件数が"
+            "一致しません。"
+            f"期待件数: {expected_count:,}, "
+            f"保存件数: {saved_count:,}"
+        )
+
+    print(
+        "EDINET財務のPostgreSQL同期が"
+        "完了しました。"
+        f"件数: {saved_count:,}"
+    )
+
+    return saved_count
+
+
+# ============================================================
+# シート書き込み
+# ============================================================
 
 def write_sheet(
     service,
@@ -946,6 +1049,31 @@ def write_sheet(
     headers: list[str],
     rows: list[list[Any]],
 ) -> None:
+    """
+    Googleスプレッドシートを更新する。
+
+    EDINET財務シートの場合は、
+    PostgreSQLへの保存成功後にシートを更新する。
+    """
+
+    if sheet_name == FINANCIAL_SHEET_NAME:
+        database_count = (
+            save_financial_sheet_rows_to_database(
+                headers,
+                rows,
+            )
+        )
+
+        if database_count != len(rows):
+            raise RuntimeError(
+                "PostgreSQLへの保存が"
+                "完了していないため、"
+                "EDINET財務シートを更新しません。"
+                f"シート予定件数: {len(rows):,}, "
+                f"DB保存確認件数: "
+                f"{database_count:,}"
+            )
+
     sheet_id = get_or_create_sheet(
         service,
         spreadsheet_id,
@@ -963,7 +1091,10 @@ def write_sheet(
         .execute()
     )
 
-    values = [headers] + rows
+    values = [
+        headers,
+        *rows,
+    ]
 
     (
         service.spreadsheets()
@@ -972,7 +1103,9 @@ def write_sheet(
             spreadsheetId=spreadsheet_id,
             range=f"'{sheet_name}'!A1",
             valueInputOption="RAW",
-            body={"values": values},
+            body={
+                "values": values,
+            },
         )
         .execute()
     )
@@ -991,7 +1124,10 @@ def write_sheet(
                                     "frozenRowCount": 1,
                                 },
                             },
-                            "fields": "gridProperties.frozenRowCount",
+                            "fields": (
+                                "gridProperties."
+                                "frozenRowCount"
+                            ),
                         }
                     },
                     {
@@ -1019,8 +1155,10 @@ def write_sheet(
                                 }
                             },
                             "fields": (
-                                "userEnteredFormat.backgroundColor,"
-                                "userEnteredFormat.textFormat"
+                                "userEnteredFormat."
+                                "backgroundColor,"
+                                "userEnteredFormat."
+                                "textFormat"
                             ),
                         }
                     },
@@ -1030,9 +1168,14 @@ def write_sheet(
                                 "range": {
                                     "sheetId": sheet_id,
                                     "startRowIndex": 0,
-                                    "endRowIndex": max(len(values), 1),
+                                    "endRowIndex": max(
+                                        len(values),
+                                        1,
+                                    ),
                                     "startColumnIndex": 0,
-                                    "endColumnIndex": len(headers),
+                                    "endColumnIndex": len(
+                                        headers
+                                    ),
                                 }
                             }
                         }
@@ -1043,7 +1186,9 @@ def write_sheet(
                                 "sheetId": sheet_id,
                                 "dimension": "COLUMNS",
                                 "startIndex": 0,
-                                "endIndex": len(headers),
+                                "endIndex": len(
+                                    headers
+                                ),
                             }
                         }
                     },
@@ -1052,6 +1197,12 @@ def write_sheet(
         )
         .execute()
     )
+
+    print(
+        f"{sheet_name}シートを更新しました。"
+        f"件数: {len(rows):,}"
+    )
+
 
 
 # ============================================================
