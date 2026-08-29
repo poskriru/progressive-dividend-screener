@@ -1,16 +1,14 @@
 """
-GitHub ActionsからSupabase PostgreSQLへ接続できることを
-確認するためのテストプログラム。
+GitHub ActionsからSupabase PostgreSQLへ接続できることと、
+初期データベーススキーマが存在することを確認する。
 
-このプログラムはデータベースへの書き込みを行わず、
-SELECT文だけを実行する。
+このプログラムはデータベースへの書き込みを行わない。
 """
 
 # ============================================================
 # 標準ライブラリ
 # ============================================================
 
-import os
 import sys
 
 
@@ -22,24 +20,32 @@ import psycopg
 
 
 # ============================================================
-# 環境変数
+# プロジェクト内モジュール
 # ============================================================
 
-def get_required_environment_variable(name: str) -> str:
-    """
-    必須環境変数を取得する。
+from database import (
+    DATABASE_SCHEMA,
+    create_database_connection,
+    get_database_information,
+    verify_required_tables,
+)
 
-    値そのものはログへ出力しない。
-    """
 
-    value = os.getenv(name, "").strip()
+# ============================================================
+# 定数
+# ============================================================
 
-    if not value:
-        raise RuntimeError(
-            f"必須環境変数が設定されていません: {name}"
-        )
+APPLICATION_NAME = (
+    "progressive-dividend-screener-db-test"
+)
 
-    return value
+REQUIRED_TABLES = {
+    "schema_migrations",
+    "securities",
+    "daily_prices",
+    "edinet_documents",
+    "annual_financials",
+}
 
 
 # ============================================================
@@ -48,54 +54,66 @@ def get_required_environment_variable(name: str) -> str:
 
 def test_database_connection() -> None:
     """
-    Supabase PostgreSQLへ接続し、
-    読み取り専用の確認クエリを実行する。
+    PostgreSQLへ接続し、初期スキーマを確認する。
     """
-
-    database_url = get_required_environment_variable(
-        "DATABASE_URL"
-    )
 
     print("PostgreSQLへの接続テストを開始します。")
 
-    with psycopg.connect(
-        database_url,
-        connect_timeout=20,
-        sslmode="require",
+    with create_database_connection(
+        APPLICATION_NAME
     ) as connection:
-        with connection.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT
-                    1 AS connection_test,
-                    current_database() AS database_name,
-                    current_user AS database_user,
-                    current_setting('server_version') AS server_version
-                """
-            )
-
-            result = cursor.fetchone()
-
-    if result is None:
-        raise RuntimeError(
-            "PostgreSQLからテスト結果を取得できませんでした。"
+        database_information = (
+            get_database_information(connection)
         )
 
-    connection_test = result[0]
-    database_name = result[1]
-    database_user = result[2]
-    server_version = result[3]
+        connection_test = (
+            database_information[
+                "connection_test"
+            ]
+        )
 
-    if connection_test != 1:
-        raise RuntimeError(
-            "PostgreSQLの接続確認値が不正です。"
+        if connection_test != 1:
+            raise RuntimeError(
+                "PostgreSQLの接続確認値が不正です。"
+            )
+
+        existing_tables = verify_required_tables(
+            connection,
+            REQUIRED_TABLES,
         )
 
     print("PostgreSQLへの接続に成功しました。")
-    print(f"データベース名: {database_name}")
-    print(f"接続ユーザー: {database_user}")
-    print(f"PostgreSQLバージョン: {server_version}")
-    print("読み取り専用テストが正常に完了しました。")
+
+    print(
+        "データベース名: "
+        f"{database_information['database_name']}"
+    )
+
+    print(
+        "接続ユーザー: "
+        f"{database_information['database_user']}"
+    )
+
+    print(
+        "PostgreSQLバージョン: "
+        f"{database_information['server_version']}"
+    )
+
+    print(
+        "専用スキーマ: "
+        f"{DATABASE_SCHEMA}"
+    )
+
+    for table_name in sorted(existing_tables):
+        print(
+            "確認済みテーブル: "
+            f"{DATABASE_SCHEMA}.{table_name}"
+        )
+
+    print(
+        "共通データベース接続処理の確認が"
+        "正常に完了しました。"
+    )
 
 
 # ============================================================
@@ -116,7 +134,8 @@ if __name__ == "__main__":
 
     except Exception as error:
         print(
-            "PostgreSQLへの接続テストに失敗しました。",
+            "PostgreSQLへの接続テストに"
+            "失敗しました。",
             file=sys.stderr,
         )
 
@@ -125,12 +144,19 @@ if __name__ == "__main__":
             file=sys.stderr,
         )
 
-        print(
-            "DATABASE_URL、データベースパスワード、"
-            "Session poolerの接続情報を確認してください。",
-            file=sys.stderr,
-        )
+        if isinstance(error, psycopg.Error):
+            # psycopgの接続例外本文には接続先情報が
+            # 含まれる場合があるため、本文は出力しない。
+            print(
+                "PostgreSQLとの通信中に"
+                "エラーが発生しました。",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"エラー内容: {error}",
+                file=sys.stderr,
+            )
 
-        # 接続文字列やパスワードがログへ含まれる可能性を
-        # 避けるため、例外本文とトレースバックは出力しない。
+        # DATABASE_URLそのものは出力しない。
         sys.exit(1)
