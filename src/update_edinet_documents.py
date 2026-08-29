@@ -1420,6 +1420,10 @@ def build_document_database_records(
     return records
 
 
+# ============================================================
+# PostgreSQL件数確認・保存
+# ============================================================
+
 def get_saved_document_count(
     cursor,
     doc_ids: list[str],
@@ -1433,7 +1437,8 @@ def get_saved_document_count(
 
     cursor.execute(
         """
-        SELECT COUNT(*)
+        SELECT
+            COUNT(*) AS saved_count
         FROM screener.edinet_documents
         WHERE doc_id = ANY(%s);
         """,
@@ -1445,7 +1450,9 @@ def get_saved_document_count(
     if result is None:
         return 0
 
-    return int(result[0])
+    return int(
+        result["saved_count"]
+    )
 
 
 def save_documents_to_database(
@@ -1515,7 +1522,9 @@ def save_documents_to_database(
             fetched_at = EXCLUDED.fetched_at;
     """
 
-    connection = create_database_connection()
+    connection = create_database_connection(
+        "update_edinet_documents"
+    )
 
     try:
         with connection.cursor() as cursor:
@@ -1559,6 +1568,7 @@ def save_documents_to_database(
     )
 
     return saved_count
+
 
 
 # ============================================================
