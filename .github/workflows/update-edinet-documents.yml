@@ -9,9 +9,15 @@ on:
   workflow_dispatch:
     inputs:
       lookback_days:
-        description: "何日前までEDINET書類を取得するか"
+        description: "終了日を含めて何日分取得するか"
         required: true
         default: "30"
+        type: string
+
+      end_date:
+        description: "取得終了日（YYYY-MM-DD、空欄なら当日）"
+        required: false
+        default: ""
         type: string
 
   # 毎日、日本時間23時に実行します。
@@ -68,6 +74,9 @@ jobs:
       EDINET_LOOKBACK_DAYS: >-
         ${{ github.event.inputs.lookback_days || '7' }}
 
+      EDINET_END_DATE: >-
+        ${{ github.event.inputs.end_date || '' }}
+
 
     steps:
       # ======================================================
@@ -102,4 +111,6 @@ jobs:
 
       - name: EDINET書類一覧を更新
         run: |
+          echo "EDINET_LOOKBACK_DAYS=${EDINET_LOOKBACK_DAYS}"
+          echo "EDINET_END_DATE=${EDINET_END_DATE:-当日}"
           python src/update_edinet_documents.py
