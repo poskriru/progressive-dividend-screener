@@ -31,6 +31,22 @@ import requests
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
+# ============================================================
+# 外部ライブラリ
+# ============================================================
+
+import pandas as pd
+import requests
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+
+
+# ============================================================
+# プロジェクト内モジュール
+# ============================================================
+
+from database import create_database_connection
+
 
 # ============================================================
 # 定数
@@ -54,6 +70,12 @@ REQUEST_TIMEOUT_SECONDS = 60
 USER_AGENT = (
     "progressive-dividend-screener/0.1 "
     "(personal investment data management)"
+)
+
+MINIMUM_DATABASE_SECURITY_RECORDS = 3000
+
+DATABASE_APPLICATION_NAME = (
+    "progressive-dividend-screener-listed-stocks"
 )
 
 
@@ -566,6 +588,454 @@ def load_and_filter_jpx_data(
 
     return headers, rows, reference_date
 
+# ============================================================
+# PostgreSQL保存
+# ============================================================
+
+def parse_database_date(value: Any) -> date | None:
+    """
+    PostgreSQLへ保存する日付へ変換する。
+    """
+
+    if value is None:
+        return None
+
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+
+    if isinstance(value, datetime):
+        return value.date()
+
+    if isinstance(value, date):
+        return value
+
+    text = str(value).strip()
+
+    if not text:
+        return None
+
+    try:
+        return date.fromisoformat(text)
+
+    except ValueError as error:
+        raise RuntimeError(
+            "日付をYYYY-MM-DD形式として"
+            "読み込めません。"
+            f"値={text}"
+        ) from error
+
+
+def parse_database_datetime(
+    value: Any,
+) -> datetime | None:
+    """
+    PostgreSQLへ保存する日時へ変換する。
+
+    タイムゾーンがない日時は日本時間として扱う。
+    """
+
+    if value is None:
+        return None
+
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+
+    if isinstance(value, datetime):
+        parsed_datetime = value
+    else:
+        text = str(value).strip()
+
+        if not text:
+            return None
+
+        try:
+            parsed_datetime = datetime.fromisoformat(
+                text
+            )
+
+        except ValueError as error:
+            raise RuntimeError(
+                "日時を読み込めません。"
+                f"値={text}"
+            ) from error
+
+    if parsed_datetime.tzinfo is None:
+        parsed_datetime = parsed_datetime.replace(
+            tzinfo=JST
+        )
+
+    return parsed_datetime
+
+
+def build_security_database_records(
+    headers: list[str],
+    rows: list[list[Any]],
+) -> list[tuple[Any, ...]]:
+    """
+    スプレッドシート出力用の銘柄データを、
+    PostgreSQL保存用のレコードへ変換する。
+    """
+
+    required_headers = [
+        "更新日時",
+        "一覧基準日",
+        "証券コード",
+        "銘柄名",
+        "市場",
+        "市場・商品区分",
+        "33業種コード",
+        "33業種区分",
+        "17業種コード",
+        "17業種区分",
+        "規模コード",
+        "規模区分",
+        "データ出典",
+        "出典URL",
+    ]
+
+    missing_headers = [
+        header
+        for header in required_headers
+        if header not in headers
+    ]
+
+    if missing_headers:
+        raise RuntimeError(
+            "PostgreSQL保存に必要な列がありません。"
+            f"不足列: {missing_headers}"
+        )
+
+    header_indexes = {
+        header: headers.index(header)
+        for header in required_headers
+    }
+
+    records: list[tuple[Any, ...]] = []
+    seen_security_codes: set[str] = set()
+
+    for row_number, row in enumerate(
+        rows,
+        start=2,
+    ):
+        def get_value(header: str) -> Any:
+            index = header_indexes[header]
+
+            if index >= len(row):
+                return ""
+
+            return row[index]
+
+        security_code = normalize_security_code(
+            get_value("証券コード")
+        )
+
+        company_name = str(
+            get_value("銘柄名")
+        ).strip()
+
+        if not security_code:
+            raise RuntimeError(
+                "証券コードが空の行があります。"
+                f"行番号: {row_number}"
+            )
+
+        if not company_name:
+            raise RuntimeError(
+                "銘柄名が空の行があります。"
+                f"行番号: {row_number}, "
+                f"証券コード: {security_code}"
+            )
+
+        if security_code in seen_security_codes:
+            raise RuntimeError(
+                "証券コードが重複しています。"
+                f"証券コード: {security_code}"
+            )
+
+        seen_security_codes.add(security_code)
+
+        records.append(
+            (
+                security_code,
+                company_name,
+                str(get_value("市場")).strip(),
+                str(
+                    get_value("市場・商品区分")
+                ).strip(),
+                str(
+                    get_value("33業種コード")
+                ).strip(),
+                str(
+                    get_value("33業種区分")
+                ).strip(),
+                str(
+                    get_value("17業種コード")
+                ).strip(),
+                str(
+                    get_value("17業種区分")
+                ).strip(),
+                str(
+                    get_value("規模コード")
+                ).strip(),
+                str(
+                    get_value("規模区分")
+                ).strip(),
+                parse_database_date(
+                    get_value("一覧基準日")
+                ),
+                str(
+                    get_value("データ出典")
+                ).strip(),
+                str(
+                    get_value("出典URL")
+                ).strip(),
+                parse_database_datetime(
+                    get_value("更新日時")
+                ),
+            )
+        )
+
+    if len(records) < MINIMUM_DATABASE_SECURITY_RECORDS:
+        raise RuntimeError(
+            "PostgreSQLへ保存する銘柄数が"
+            "少なすぎます。"
+            f"取得件数: {len(records):,}, "
+            "既存銘柄を非アクティブ化せず"
+            "処理を停止します。"
+        )
+
+    return records
+
+
+def save_securities_to_database(
+    headers: list[str],
+    rows: list[list[Any]],
+) -> dict[str, int]:
+    """
+    JPX銘柄マスターをPostgreSQLへ保存する。
+
+    現在のJPX一覧にある銘柄はUPSERTし、
+    一覧から消えた既存銘柄は削除せず
+    is_active=falseへ変更する。
+    """
+
+    records = build_security_database_records(
+        headers,
+        rows,
+    )
+
+    print(
+        "PostgreSQLへ銘柄マスターを保存します。"
+        f"保存対象: {len(records):,}銘柄"
+    )
+
+    with create_database_connection(
+        DATABASE_APPLICATION_NAME
+    ) as connection:
+        with connection.transaction():
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    CREATE TEMP TABLE
+                        securities_sync
+                    (
+                        security_code text NOT NULL,
+                        company_name text NOT NULL,
+                        market text,
+                        market_category text,
+                        industry_33_code text,
+                        industry_33_name text,
+                        industry_17_code text,
+                        industry_17_name text,
+                        scale_code text,
+                        scale_name text,
+                        reference_date date,
+                        source text NOT NULL,
+                        source_url text,
+                        source_updated_at timestamptz
+                    )
+                    ON COMMIT DROP
+                    """
+                )
+
+                with cursor.copy(
+                    """
+                    COPY securities_sync (
+                        security_code,
+                        company_name,
+                        market,
+                        market_category,
+                        industry_33_code,
+                        industry_33_name,
+                        industry_17_code,
+                        industry_17_name,
+                        scale_code,
+                        scale_name,
+                        reference_date,
+                        source,
+                        source_url,
+                        source_updated_at
+                    )
+                    FROM STDIN
+                    """
+                ) as copy:
+                    for record in records:
+                        copy.write_row(record)
+
+                cursor.execute(
+                    """
+                    INSERT INTO screener.securities (
+                        security_code,
+                        company_name,
+                        market,
+                        market_category,
+                        industry_33_code,
+                        industry_33_name,
+                        industry_17_code,
+                        industry_17_name,
+                        scale_code,
+                        scale_name,
+                        reference_date,
+                        is_active,
+                        source,
+                        source_url,
+                        source_updated_at
+                    )
+                    SELECT
+                        security_code,
+                        company_name,
+                        NULLIF(market, ''),
+                        NULLIF(market_category, ''),
+                        NULLIF(industry_33_code, ''),
+                        NULLIF(industry_33_name, ''),
+                        NULLIF(industry_17_code, ''),
+                        NULLIF(industry_17_name, ''),
+                        NULLIF(scale_code, ''),
+                        NULLIF(scale_name, ''),
+                        reference_date,
+                        true,
+                        source,
+                        NULLIF(source_url, ''),
+                        source_updated_at
+                    FROM securities_sync
+                    ON CONFLICT (security_code)
+                    DO UPDATE SET
+                        company_name = EXCLUDED.company_name,
+                        market = EXCLUDED.market,
+                        market_category = (
+                            EXCLUDED.market_category
+                        ),
+                        industry_33_code = (
+                            EXCLUDED.industry_33_code
+                        ),
+                        industry_33_name = (
+                            EXCLUDED.industry_33_name
+                        ),
+                        industry_17_code = (
+                            EXCLUDED.industry_17_code
+                        ),
+                        industry_17_name = (
+                            EXCLUDED.industry_17_name
+                        ),
+                        scale_code = EXCLUDED.scale_code,
+                        scale_name = EXCLUDED.scale_name,
+                        reference_date = (
+                            EXCLUDED.reference_date
+                        ),
+                        is_active = true,
+                        source = EXCLUDED.source,
+                        source_url = EXCLUDED.source_url,
+                        source_updated_at = (
+                            EXCLUDED.source_updated_at
+                        )
+                    """
+                )
+
+                cursor.execute(
+                    """
+                    UPDATE screener.securities AS security
+                    SET is_active = false
+                    WHERE security.is_active = true
+                      AND security.source = 'JPX'
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM securities_sync AS current_list
+                          WHERE
+                              current_list.security_code
+                              = security.security_code
+                      )
+                    """
+                )
+
+                deactivated_count = cursor.rowcount
+
+                cursor.execute(
+                    """
+                    SELECT
+                        count(*) FILTER (
+                            WHERE is_active = true
+                        ) AS active_count,
+                        count(*) FILTER (
+                            WHERE is_active = false
+                        ) AS inactive_count,
+                        count(*) AS total_count
+                    FROM screener.securities
+                    """
+                )
+
+                count_result = cursor.fetchone()
+
+    if count_result is None:
+        raise RuntimeError(
+            "PostgreSQL保存後の銘柄数を"
+            "確認できませんでした。"
+        )
+
+    result = {
+        "saved_count": len(records),
+        "deactivated_count": deactivated_count,
+        "active_count": int(
+            count_result["active_count"]
+        ),
+        "inactive_count": int(
+            count_result["inactive_count"]
+        ),
+        "total_count": int(
+            count_result["total_count"]
+        ),
+    }
+
+    if result["active_count"] != len(records):
+        raise RuntimeError(
+            "PostgreSQLの有効銘柄数が"
+            "JPX一覧件数と一致しません。"
+            f"JPX一覧: {len(records):,}, "
+            "DB有効銘柄: "
+            f"{result['active_count']:,}"
+        )
+
+    print("PostgreSQLへの保存が完了しました。")
+    print(
+        "DB有効銘柄: "
+        f"{result['active_count']:,}銘柄"
+    )
+    print(
+        "DB非アクティブ銘柄: "
+        f"{result['inactive_count']:,}銘柄"
+    )
+    print(
+        "今回非アクティブ化: "
+        f"{result['deactivated_count']:,}銘柄"
+    )
+
+    return result
+
 
 # ============================================================
 # Google認証
@@ -888,7 +1358,8 @@ def count_markets(
 
 def main() -> None:
     """
-    JPX一覧取得からスプレッドシート更新までを実行する。
+    JPX一覧取得からPostgreSQL・
+    スプレッドシート更新までを実行する。
     """
 
     excel_content = download_jpx_listed_stocks()
@@ -897,6 +1368,16 @@ def main() -> None:
         excel_content
     )
 
+    # PostgreSQLを正本候補として先に更新する。
+    # DB更新に失敗した場合は、スプレッドシートを
+    # 更新せず処理を停止する。
+    database_result = save_securities_to_database(
+        headers,
+        rows,
+    )
+
+    # 移行期間中は従来どおり
+    # Googleスプレッドシートも更新する。
     write_to_google_sheets(headers, rows)
 
     market_counts = count_markets(headers, rows)
@@ -905,13 +1386,41 @@ def main() -> None:
         [
             "JPXの東証上場銘柄一覧を更新しました。",
             "",
-            f"**一覧基準日:** {reference_date or '取得できませんでした'}",
+            (
+                f"**一覧基準日:** "
+                f"{reference_date or '取得できませんでした'}"
+            ),
             f"**合計:** {len(rows):,}銘柄",
-            f"**プライム:** {market_counts['プライム']:,}銘柄",
-            f"**スタンダード:** {market_counts['スタンダード']:,}銘柄",
-            f"**グロース:** {market_counts['グロース']:,}銘柄",
+            (
+                f"**プライム:** "
+                f"{market_counts['プライム']:,}銘柄"
+            ),
+            (
+                f"**スタンダード:** "
+                f"{market_counts['スタンダード']:,}銘柄"
+            ),
+            (
+                f"**グロース:** "
+                f"{market_counts['グロース']:,}銘柄"
+            ),
             "",
-            f"**更新先:** `{SPREADSHEET_SHEET_NAME}`",
+            (
+                "**DB有効銘柄:** "
+                f"{database_result['active_count']:,}銘柄"
+            ),
+            (
+                "**DB非アクティブ銘柄:** "
+                f"{database_result['inactive_count']:,}銘柄"
+            ),
+            (
+                "**今回非アクティブ化:** "
+                f"{database_result['deactivated_count']:,}銘柄"
+            ),
+            "",
+            (
+                f"**更新先:** "
+                f"`PostgreSQL / {SPREADSHEET_SHEET_NAME}`"
+            ),
             "**データ出典:** JPX",
         ]
     )
