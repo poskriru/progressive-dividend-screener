@@ -3509,38 +3509,33 @@ def main() -> None:
         max_documents,
     )
 
+    # ========================================================
+    # 更新対象が存在しない場合
+    #
+    # 株式指標は、このスクリプトの完了後に
+    # export_database_indicators.pyがPostgreSQLから出力する。
+    # ========================================================
+
     if not target_documents:
-        prices = load_latest_prices(
-            service,
-            spreadsheet_id,
-        )
-
-        indicator_rows = build_indicator_rows(
-            existing_financial_rows,
-            prices,
-        )
-
-        write_sheet(
-            service,
-            spreadsheet_id,
-            INDICATOR_SHEET_NAME,
-            INDICATOR_HEADERS,
-            indicator_rows,
-        )
-
         send_discord_notification(
             discord_webhook_url,
             "ℹ️ EDINET財務更新対象なし",
             (
                 "未処理の有価証券報告書はありません。\n\n"
-                f"既存財務データ: {len(existing_financial_rows):,}件\n"
-                f"株式指標: {len(indicator_rows):,}銘柄"
+                f"既存財務データ: "
+                f"{len(existing_financial_rows):,}件\n"
+                "株式指標はPostgreSQLから別工程で出力します。"
             ),
             success=True,
         )
 
         print("未処理の有価証券報告書はありません。")
+        print(
+            "株式指標はPostgreSQLから"
+            "別工程で出力します。"
+        )
         return
+
 
     session = requests.Session()
     session.headers.update(
@@ -3827,6 +3822,9 @@ def main() -> None:
     
     # ============================================================
     # EDINET財務シート更新
+    #
+    # 株式指標は、このスクリプトの完了後に
+    # export_database_indicators.pyがPostgreSQLから出力する。
     # ============================================================
 
     write_sheet(
@@ -3837,24 +3835,6 @@ def main() -> None:
         all_financial_rows,
     )
 
-    prices = load_latest_prices(
-        service,
-        spreadsheet_id,
-    )
-
-    indicator_rows = build_indicator_rows(
-        all_financial_rows,
-        prices,
-    )
-
-    write_sheet(
-        service,
-        spreadsheet_id,
-        INDICATOR_SHEET_NAME,
-        INDICATOR_HEADERS,
-        indicator_rows,
-    )
-
     send_discord_notification(
         discord_webhook_url,
         "✅ EDINET財務情報更新完了",
@@ -3862,12 +3842,13 @@ def main() -> None:
             f"処理対象: {len(target_documents):,}件\n"
             f"成功: {success_count:,}件\n"
             f"失敗: {failure_count:,}件\n"
-            f"主要項目に欠損あり: {missing_metric_count:,}件\n"
-            f"EDINET財務保存総数: {len(all_financial_rows):,}件\n"
-            f"株式指標作成数: {len(indicator_rows):,}銘柄\n\n"
-            f"保存先: {FINANCIAL_SHEET_NAME} / "
-            f"{INDICATOR_SHEET_NAME}\n"
-            "データ出典: 金融庁EDINET API・JPX"
+            f"主要項目に欠損あり: "
+            f"{missing_metric_count:,}件\n"
+            f"EDINET財務保存総数: "
+            f"{len(all_financial_rows):,}件\n\n"
+            f"保存先: {FINANCIAL_SHEET_NAME}\n"
+            "株式指標はPostgreSQLから別工程で出力します。\n"
+            "データ出典: 金融庁EDINET API"
         ),
         success=failure_count == 0,
     )
@@ -3875,7 +3856,12 @@ def main() -> None:
     print(
         f"完了: 成功={success_count}, "
         f"失敗={failure_count}, "
-        f"株式指標={len(indicator_rows)}"
+        f"EDINET財務保存総数={len(all_financial_rows)}"
+    )
+
+    print(
+        "株式指標はPostgreSQLから"
+        "別工程で出力します。"
     )
 
 
