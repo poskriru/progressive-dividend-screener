@@ -8,6 +8,11 @@ on:
         required: true
         default: "500"
 
+      force_doc_ids:
+        description: "強制再処理するdoc_id（カンマ区切り、通常実行時は空欄）"
+        required: false
+        default: ""
+
   # ==========================================================
   # 5年分財務情報バックフィル中の一時スケジュール
   # UTC基準で4時間ごとに実行
@@ -29,18 +34,20 @@ jobs:
 
     env:
       TZ: Asia/Tokyo
-    
+
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
-    
+
       GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-    
+
       GOOGLE_SPREADSHEET_ID: ${{ secrets.GOOGLE_SPREADSHEET_ID }}
-    
+
       DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-    
+
       EDINET_API_KEY: ${{ secrets.EDINET_API_KEY }}
-    
+
       MAX_DOCUMENTS: ${{ github.event.inputs.max_documents || '500' }}
+
+      FORCE_DOC_IDS: ${{ github.event.inputs.force_doc_ids || '' }}
 
     steps:
       # ======================================================
@@ -72,6 +79,7 @@ jobs:
       - name: Update EDINET financials
         run: |
           echo "MAX_DOCUMENTS=${MAX_DOCUMENTS}"
+          echo "FORCE_DOC_IDS=${FORCE_DOC_IDS}"
           python src/update_edinet_financials.py
 
       # ======================================================

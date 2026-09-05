@@ -1337,6 +1337,21 @@ def load_target_documents(
     documents = rows_to_dicts(values)
     targets = []
 
+    force_doc_ids = {
+        normalize_text(doc_id)
+        for doc_id in os.getenv(
+            "FORCE_DOC_IDS",
+            "",
+        ).split(",")
+        if normalize_text(doc_id)
+    }
+
+    if force_doc_ids:
+        print(
+            "強制再処理対象doc_id: "
+            + ", ".join(sorted(force_doc_ids))
+        )
+
     for row in documents:
         doc_id = get_first_value(
             row,
@@ -1384,7 +1399,18 @@ def load_target_documents(
         if not doc_id:
             continue
 
-        if doc_id in processed_doc_ids:
+        # ====================================================
+        # 強制再処理が指定されている場合
+        #
+        # 指定されたdoc_idだけを対象とし、
+        # 処理済み判定を無視する。
+        # ====================================================
+
+        if force_doc_ids:
+            if doc_id not in force_doc_ids:
+                continue
+
+        elif doc_id in processed_doc_ids:
             continue
 
         is_annual_report = (
@@ -1398,10 +1424,20 @@ def load_target_documents(
         if not is_annual_report:
             continue
 
-        if csv_flag in {"0", "なし", "無", "False", "false"}:
+        if csv_flag in {
+            "0",
+            "なし",
+            "無",
+            "False",
+            "false",
+        }:
             continue
 
-        if withdrawal_status in {"1", "取下げ", "取下げ済み"}:
+        if withdrawal_status in {
+            "1",
+            "取下げ",
+            "取下げ済み",
+        }:
             continue
 
         row["_doc_id"] = doc_id
@@ -1410,9 +1446,32 @@ def load_target_documents(
     targets.sort(
         key=lambda item: get_first_value(
             item,
-            ["提出日時", "提出日", "submitDateTime"],
+            [
+                "提出日時",
+                "提出日",
+                "submitDateTime",
+            ],
         )
     )
+
+    if force_doc_ids:
+        found_doc_ids = {
+            target["_doc_id"]
+            for target in targets
+        }
+
+        missing_doc_ids = (
+            force_doc_ids - found_doc_ids
+        )
+
+        if missing_doc_ids:
+            raise RuntimeError(
+                "EDINET書類シートに強制再処理対象が"
+                "見つかりません。"
+                f"doc_id={sorted(missing_doc_ids)}"
+            )
+
+        return targets
 
     return targets[:max_documents]
 
