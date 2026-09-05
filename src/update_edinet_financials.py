@@ -636,6 +636,106 @@ extend_metric_definition(
     ],
 )
 
+# ============================================================
+# US GAAPの経営指標等で使用される要素IDを追加
+# ============================================================
+
+extend_metric_definition(
+    "revenue",
+    "element_ids",
+    [
+        "RevenuesUSGAAPSummaryOfBusinessResults",
+    ],
+)
+
+extend_metric_definition(
+    "ordinary_income",
+    "element_ids",
+    [
+        "ProfitLossBeforeTaxUSGAAPSummaryOfBusinessResults",
+    ],
+)
+
+extend_metric_definition(
+    "net_income",
+    "element_ids",
+    [
+        "NetIncomeLossAttributableToOwnersOfParentUSGAAPSummaryOfBusinessResults",
+    ],
+)
+
+extend_metric_definition(
+    "total_assets",
+    "element_ids",
+    [
+        "TotalAssetsUSGAAPSummaryOfBusinessResults",
+    ],
+)
+
+extend_metric_definition(
+    "net_assets",
+    "element_ids",
+    [
+        "EquityIncludingPortionAttributableToNonControllingInterestUSGAAPSummaryOfBusinessResults",
+    ],
+)
+
+extend_metric_definition(
+    "equity",
+    "element_ids",
+    [
+        "EquityAttributableToOwnersOfParentUSGAAPSummaryOfBusinessResults",
+    ],
+)
+
+extend_metric_definition(
+    "operating_cf",
+    "element_ids",
+    [
+        "CashFlowsFromUsedInOperatingActivitiesUSGAAPSummaryOfBusinessResults",
+    ],
+)
+
+extend_metric_definition(
+    "investing_cf",
+    "element_ids",
+    [
+        "CashFlowsFromUsedInInvestingActivitiesUSGAAPSummaryOfBusinessResults",
+    ],
+)
+
+extend_metric_definition(
+    "financing_cf",
+    "element_ids",
+    [
+        "CashFlowsFromUsedInFinancingActivitiesUSGAAPSummaryOfBusinessResults",
+    ],
+)
+
+extend_metric_definition(
+    "cash",
+    "element_ids",
+    [
+        "CashAndCashEquivalentsUSGAAPSummaryOfBusinessResults",
+    ],
+)
+
+extend_metric_definition(
+    "eps",
+    "element_ids",
+    [
+        "BasicEarningsLossPerShareUSGAAPSummaryOfBusinessResults",
+    ],
+)
+
+extend_metric_definition(
+    "bps",
+    "element_ids",
+    [
+        "EquityAttributableToOwnersOfParentPerShareUSGAAPSummaryOfBusinessResults",
+    ],
+)
+
 
 # ============================================================
 # 対象期間開始日・終了日の定義
