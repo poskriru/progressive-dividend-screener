@@ -45,7 +45,7 @@ from database import create_database_connection
 
 JPX_LISTED_STOCKS_URL = (
     "https://www.jpx.co.jp/markets/statistics-equities/"
-    "misc/tvdivq0000001vg2-att/data_j.xls"
+    "misc/tvdivq0000001vg2-att/data_j.xlsx"
 )
 
 SPREADSHEET_SHEET_NAME = "銘柄マスター"
@@ -354,7 +354,7 @@ def load_and_filter_jpx_data(
     dataframe = pd.read_excel(
         io.BytesIO(excel_content),
         dtype=object,
-        engine="xlrd",
+        engine="openpyxl",
     )
 
     if dataframe.empty:
@@ -372,12 +372,10 @@ def load_and_filter_jpx_data(
         ["日付", "基準日"],
         required=False,
     )
-
     code_column = find_column(
         dataframe,
         ["コード", "証券コード"],
     )
-
     company_name_column = find_column(
         dataframe,
         ["銘柄名", "会社名"],
@@ -393,7 +391,6 @@ def load_and_filter_jpx_data(
         ["33業種コード"],
         required=False,
     )
-
     industry_33_name_column = find_column(
         dataframe,
         ["33業種区分", "33業種名"],
@@ -405,7 +402,6 @@ def load_and_filter_jpx_data(
         ["17業種コード"],
         required=False,
     )
-
     industry_17_name_column = find_column(
         dataframe,
         ["17業種区分", "17業種名"],
@@ -417,7 +413,6 @@ def load_and_filter_jpx_data(
         ["規模コード"],
         required=False,
     )
-
     scale_name_column = find_column(
         dataframe,
         ["規模区分"],
