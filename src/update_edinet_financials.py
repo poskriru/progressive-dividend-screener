@@ -4080,45 +4080,7 @@ def main() -> None:
                 f"決算範囲={consolidation_label}"
             )
 
-            # ====================================================
-            # US GAAP抽出診断
-            #
-            # 小松製作所・キヤノンの2書類だけを対象とする。
-            # 原因特定後に、この呼び出しと診断関数を削除する。
-            # ====================================================
 
-            if (
-                accounting_standard == "US GAAP"
-                and doc_id in {
-                    "S100YD25",
-                    "S100XTLJ",
-                }
-            ):
-                print_us_gaap_candidate_diagnostics(
-                    facts=facts,
-                    metric_names=[
-                        "revenue",
-                        "ordinary_income",
-                        "net_income",
-                        "total_assets",
-                        "net_assets",
-                        "equity",
-                        "operating_cf",
-                        "investing_cf",
-                        "financing_cf",
-                        "cash",
-                        "eps",
-                        "bps",
-                    ],
-                    accounting_standard=accounting_standard,
-                    is_consolidated_report=(
-                        is_consolidated_report
-                    ),
-                    doc_id=doc_id,
-                )
-
-
-            
             # =================================================
             # 会計基準と決算範囲を統一して抽出
             # =================================================
