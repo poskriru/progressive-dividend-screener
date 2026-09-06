@@ -2497,12 +2497,14 @@ def detect_accounting_standard(
 
     return candidates[0]["value"]
 
-
+def get_fact_accounting_standard_scope(
+    fact: dict[str, str],
+) -> str:
     # ========================================================
     # 要素ID・項目名に明示された会計基準を最優先で判定
     # ========================================================
 
-    element_id = get_fact_value(
+    explicit_element_id = get_fact_value(
         fact,
         [
             "要素ID",
@@ -2512,7 +2514,7 @@ def detect_accounting_standard(
         ],
     )
 
-    label = get_fact_value(
+    explicit_label = get_fact_value(
         fact,
         [
             "項目名",
@@ -2522,23 +2524,19 @@ def detect_accounting_standard(
         ],
     )
 
-    accounting_marker = re.sub(
+    explicit_accounting_marker = re.sub(
         r"\s+",
         "",
         normalize_text(
-            f"{element_id} {label}"
+            f"{explicit_element_id} {explicit_label}"
         ).upper(),
     )
 
-    # jpcrp_cor配下にもUS GAAP用要素が存在するため、
-    # jpcrp_corなどによる日本基準判定より先に処理する。
-    if "USGAAP" in accounting_marker:
+    # jpcrp_cor配下にもUS GAAP用要素があるため、
+    # 名前空間などによる日本基準判定より先に処理する。
+    if "USGAAP" in explicit_accounting_marker:
         return "us_gaap"
-
-
-def get_fact_accounting_standard_scope(
-    fact: dict[str, str],
-) -> str:
+   
     """
     ファクトがIFRS、日本基準、または会計基準に依存しない
     共通項目のどれに該当するかを判定する。
