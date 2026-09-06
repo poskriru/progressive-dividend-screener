@@ -2500,6 +2500,15 @@ def detect_accounting_standard(
 def get_fact_accounting_standard_scope(
     fact: dict[str, str],
 ) -> str:
+    """
+    ファクトがIFRS、日本基準、または会計基準に依存しない
+    共通項目のどれに該当するかを判定する。
+
+    戻り値:
+        ifrs
+        japan_gaap
+        neutral
+    """
     # ========================================================
     # 要素ID・項目名に明示された会計基準を最優先で判定
     # ========================================================
@@ -2537,15 +2546,7 @@ def get_fact_accounting_standard_scope(
     if "USGAAP" in explicit_accounting_marker:
         return "us_gaap"
    
-    """
-    ファクトがIFRS、日本基準、または会計基準に依存しない
-    共通項目のどれに該当するかを判定する。
 
-    戻り値:
-        ifrs
-        japan_gaap
-        neutral
-    """
     element_id = get_fact_value(
         fact,
         [
@@ -2649,276 +2650,6 @@ def fact_matches_accounting_standard(
     # ========================================================
 
     return fact_scope == "neutral"
-
-
-# ============================================================
-# US GAAP抽出候補の診断
-# ============================================================
-
-def print_us_gaap_candidate_diagnostics(
-    facts: list[dict[str, str]],
-    metric_names: list[str],
-    accounting_standard: str,
-    is_consolidated_report: bool | None,
-    doc_id: str,
-) -> None:
-    """
-    US GAAP要素がCSVに存在するか、および各フィルタの
-    判定結果をGitHub Actionsログへ出力する。
-
-    原因特定後に、この関数と呼び出し箇所を削除する。
-    """
-    print(
-        "============================================================"
-    )
-    print(
-        f"{doc_id}: US GAAP抽出診断開始 "
-        f"facts={len(facts):,}, "
-        f"accounting_standard={accounting_standard}, "
-        f"is_consolidated={is_consolidated_report}"
-    )
-
-    if facts:
-        print(
-            f"{doc_id}: CSV正規化後の列名="
-            f"{list(facts[0].keys())}"
-        )
-
-    for metric_name in metric_names:
-        definition = METRIC_DEFINITIONS[metric_name]
-
-        expected_element_ids = {
-            normalize_text(element_id)
-            for element_id in definition.get(
-                "element_ids",
-                [],
-            )
-            if "USGAAP" in normalize_text(element_id).upper()
-        }
-
-        print(
-            "------------------------------------------------------------"
-        )
-        print(
-            f"{doc_id}: 診断対象metric={metric_name}, "
-            f"US GAAP定義ID="
-            f"{sorted(expected_element_ids)}"
-        )
-
-        raw_us_gaap_count = 0
-        element_id_match_count = 0
-        definition_match_count = 0
-
-        for fact_index, fact in enumerate(
-            facts,
-            start=1,
-        ):
-            element_id = get_fact_value(
-                fact,
-                [
-                    "要素ID",
-                    "要素ＩＤ",
-                    "element_id",
-                    "Element ID",
-                    "ElementID",
-                ],
-            )
-
-            label = get_fact_value(
-                fact,
-                [
-                    "項目名",
-                    "標準ラベル",
-                    "ラベル",
-                    "item_name",
-                    "label",
-                ],
-            )
-
-            value = get_fact_value(
-                fact,
-                [
-                    "値",
-                    "value",
-                    "Value",
-                ],
-            )
-
-            context_id = get_fact_value(
-                fact,
-                [
-                    "コンテキストID",
-                    "コンテキストＩＤ",
-                    "context_id",
-                    "Context ID",
-                    "ContextID",
-                ],
-            )
-
-            relative_year = get_fact_value(
-                fact,
-                [
-                    "相対年度",
-                    "relative_year",
-                ],
-            )
-
-            consolidated_type = get_fact_value(
-                fact,
-                [
-                    "連結・個別",
-                    "連結又は個別",
-                    "consolidated_or_nonconsolidated",
-                ],
-            )
-
-            unit_id = get_fact_value(
-                fact,
-                [
-                    "単位ID",
-                    "単位ＩＤ",
-                    "unit_id",
-                    "Unit ID",
-                    "UnitID",
-                ],
-            )
-
-            source_file = normalize_text(
-                fact.get("_source_file", "")
-            )
-
-            normalized_element_id = normalize_text(
-                element_id
-            )
-
-            local_element_id = (
-                normalized_element_id
-                .split("}")[-1]
-                .split(":")[-1]
-            )
-
-            raw_fact_text = " | ".join(
-                normalize_text(item)
-                for item in fact.values()
-            )
-
-            contains_us_gaap_text = (
-                "USGAAP" in raw_fact_text.upper()
-            )
-
-            element_id_match = any(
-                local_element_id == expected_id
-                or normalized_element_id == expected_id
-                or normalized_element_id.endswith(
-                    f":{expected_id}"
-                )
-                or normalized_element_id.endswith(
-                    f"}}{expected_id}"
-                )
-                for expected_id in expected_element_ids
-            )
-
-            definition_match = (
-                fact_matches_definition(
-                    fact,
-                    definition,
-                )
-            )
-
-            if contains_us_gaap_text:
-                raw_us_gaap_count += 1
-
-            if element_id_match:
-                element_id_match_count += 1
-
-            if definition_match:
-                definition_match_count += 1
-
-            # 対象US GAAP要素、または定義一致候補だけを出力する。
-            if not (
-                element_id_match
-                or (
-                    definition_match
-                    and contains_us_gaap_text
-                )
-            ):
-                continue
-
-            accounting_scope = (
-                get_fact_accounting_standard_scope(
-                    fact
-                )
-            )
-
-            consolidation_scope = (
-                get_fact_consolidation_scope(
-                    fact
-                )
-            )
-
-            accounting_match = (
-                fact_matches_accounting_standard(
-                    fact,
-                    definition,
-                    accounting_standard,
-                )
-            )
-
-            consolidation_match = (
-                fact_matches_report_scope(
-                    fact,
-                    definition,
-                    is_consolidated_report,
-                )
-            )
-
-            candidate_score = score_fact(
-                fact,
-                definition,
-            )
-
-            print(
-                f"{doc_id}: "
-                f"fact_index={fact_index} | "
-                f"metric={metric_name} | "
-                f"value={value!r} | "
-                f"element_id={element_id!r} | "
-                f"local_element_id={local_element_id!r} | "
-                f"label={label!r} | "
-                f"context_id={context_id!r} | "
-                f"relative_year={relative_year!r} | "
-                f"consolidated_type="
-                f"{consolidated_type!r} | "
-                f"accounting_scope="
-                f"{accounting_scope!r} | "
-                f"consolidation_scope="
-                f"{consolidation_scope!r} | "
-                f"definition_match="
-                f"{definition_match} | "
-                f"accounting_match="
-                f"{accounting_match} | "
-                f"consolidation_match="
-                f"{consolidation_match} | "
-                f"unit_id={unit_id!r} | "
-                f"score={candidate_score} | "
-                f"source_file={source_file!r}"
-            )
-
-        print(
-            f"{doc_id}: 診断集計 "
-            f"metric={metric_name}, "
-            f"USGAAP文字列を含む全fact="
-            f"{raw_us_gaap_count}, "
-            f"要素ID一致={element_id_match_count}, "
-            f"定義一致={definition_match_count}"
-        )
-
-    print(
-        f"{doc_id}: US GAAP抽出診断終了"
-    )
-    print(
-        "============================================================"
-    )
 
 
 # ============================================================
