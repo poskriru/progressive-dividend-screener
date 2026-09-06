@@ -72,6 +72,7 @@ FINANCIAL_HEADERS = [
     "書類管理番号",
     "書類種別",
     "会計基準",
+    "連結区分",
     "売上高（百万円）",
     "営業利益（百万円）",
     "経常利益（百万円）",
@@ -92,8 +93,20 @@ FINANCIAL_HEADERS = [
     "抽出エラー",
     "売上高要素ID",
     "営業利益要素ID",
+    "経常利益要素ID",
     "純利益要素ID",
+    "総資産要素ID",
+    "純資産要素ID",
+    "自己資本要素ID",
+    "営業CF要素ID",
+    "投資CF要素ID",
+    "財務CF要素ID",
+    "現金及び現金同等物要素ID",
+    "EPS要素ID",
+    "BPS要素ID",
     "配当要素ID",
+    "発行済株式数要素ID",
+    "CSVファイル",
     "データ出典",
     "EDINET閲覧URL",
 ]
@@ -3202,6 +3215,56 @@ def metric_element_id(
 
     return normalize_text(metric.get("element_id", ""))
 
+def metric_source_files(
+    metrics: dict[str, dict[str, Any] | None],
+) -> str:
+    """
+    最終的に採用された財務項目の取得元CSVファイルを返す。
+
+    複数のCSVファイルから項目を取得している場合は、
+    重複を除いたファイル名をカンマ区切りで保存する。
+    """
+    metric_names = [
+        "revenue",
+        "operating_income",
+        "ordinary_income",
+        "net_income",
+        "total_assets",
+        "net_assets",
+        "equity",
+        "operating_cf",
+        "investing_cf",
+        "financing_cf",
+        "cash",
+        "eps",
+        "bps",
+        "dividend_per_share",
+        "shares_issued",
+    ]
+
+    source_files: list[str] = []
+
+    for metric_name in metric_names:
+        metric = metrics.get(metric_name)
+
+        if not metric:
+            continue
+
+        source_file = normalize_text(
+            metric.get(
+                "source_file",
+                "",
+            )
+        )
+
+        if (
+            source_file
+            and source_file not in source_files
+        ):
+            source_files.append(source_file)
+
+    return ", ".join(source_files)
+
 
 # ============================================================
 # EDINET財務行の作成
@@ -3212,13 +3275,17 @@ def build_financial_row(
     metrics: dict[str, dict[str, Any] | None],
     status: str,
     error_message: str = "",
+    is_consolidated_report: bool | None = None,
 ) -> list[Any]:
     doc_id = document["_doc_id"]
 
     security_code = normalize_security_code(
         get_first_value(
             document,
-            ["証券コード", "secCode"],
+            [
+                "証券コード",
+                "secCode",
+            ],
         )
     )
 
@@ -3238,7 +3305,10 @@ def build_financial_row(
     )
 
     period_start = (
-        metric_value(metrics, "period_start")
+        metric_value(
+            metrics,
+            "period_start",
+        )
         or get_first_value(
             document,
             [
@@ -3251,7 +3321,10 @@ def build_financial_row(
     )
 
     period_end = (
-        metric_value(metrics, "period_end")
+        metric_value(
+            metrics,
+            "period_end",
+        )
         or get_first_value(
             document,
             [
@@ -3263,37 +3336,74 @@ def build_financial_row(
         )
     )
 
+    if is_consolidated_report is True:
+        consolidation_label = "連結"
+
+    elif is_consolidated_report is False:
+        consolidation_label = "非連結"
+
+    else:
+        consolidation_label = "判定不能"
+
     return [
-        datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S"),
+        datetime.now(JST).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        ),
         get_first_value(
             document,
-            ["提出日時", "submitDateTime"],
+            [
+                "提出日時",
+                "submitDateTime",
+            ],
         ),
         normalize_text(period_start),
         normalize_text(period_end),
         security_code,
-        get_first_value(document, ["銘柄名"]),
-        get_first_value(document, ["市場"]),
         get_first_value(
             document,
-            ["提出者名", "filerName"],
+            [
+                "銘柄名",
+            ],
         ),
         get_first_value(
             document,
-            ["EDINETコード", "edinetCode"],
+            [
+                "市場",
+            ],
+        ),
+        get_first_value(
+            document,
+            [
+                "提出者名",
+                "filerName",
+            ],
+        ),
+        get_first_value(
+            document,
+            [
+                "EDINETコード",
+                "edinetCode",
+            ],
         ),
         doc_id,
         get_first_value(
             document,
-            ["書類種別", "書類概要"],
+            [
+                "書類種別",
+                "書類概要",
+            ],
         ),
         metric_value(
             metrics,
             "accounting_standard",
         ) or "",
+        consolidation_label,
         safe_round(
             yen_to_million(
-                metric_value(metrics, "revenue")
+                metric_value(
+                    metrics,
+                    "revenue",
+                )
             )
         ),
         safe_round(
@@ -3314,46 +3424,80 @@ def build_financial_row(
         ),
         safe_round(
             yen_to_million(
-                metric_value(metrics, "net_income")
+                metric_value(
+                    metrics,
+                    "net_income",
+                )
             )
         ),
         safe_round(
             yen_to_million(
-                metric_value(metrics, "total_assets")
+                metric_value(
+                    metrics,
+                    "total_assets",
+                )
             )
         ),
         safe_round(
             yen_to_million(
-                metric_value(metrics, "net_assets")
+                metric_value(
+                    metrics,
+                    "net_assets",
+                )
             )
         ),
         safe_round(
             yen_to_million(
-                metric_value(metrics, "equity")
+                metric_value(
+                    metrics,
+                    "equity",
+                )
             )
         ),
         safe_round(
             yen_to_million(
-                metric_value(metrics, "operating_cf")
+                metric_value(
+                    metrics,
+                    "operating_cf",
+                )
             )
         ),
         safe_round(
             yen_to_million(
-                metric_value(metrics, "investing_cf")
+                metric_value(
+                    metrics,
+                    "investing_cf",
+                )
             )
         ),
         safe_round(
             yen_to_million(
-                metric_value(metrics, "financing_cf")
+                metric_value(
+                    metrics,
+                    "financing_cf",
+                )
             )
         ),
         safe_round(
             yen_to_million(
-                metric_value(metrics, "cash")
+                metric_value(
+                    metrics,
+                    "cash",
+                )
             )
         ),
-        safe_round(metric_value(metrics, "eps")),
-        safe_round(metric_value(metrics, "bps")),
+        safe_round(
+            metric_value(
+                metrics,
+                "eps",
+            )
+        ),
+        safe_round(
+            metric_value(
+                metrics,
+                "bps",
+            )
+        ),
         safe_round(
             metric_value(
                 metrics,
@@ -3361,24 +3505,80 @@ def build_financial_row(
             )
         ),
         safe_round(
-            metric_value(metrics, "shares_issued"),
+            metric_value(
+                metrics,
+                "shares_issued",
+            ),
             0,
         ),
         extracted_count,
         status,
         error_message[:1000],
-        metric_element_id(metrics, "revenue"),
+        metric_element_id(
+            metrics,
+            "revenue",
+        ),
         metric_element_id(
             metrics,
             "operating_income",
         ),
-        metric_element_id(metrics, "net_income"),
+        metric_element_id(
+            metrics,
+            "ordinary_income",
+        ),
+        metric_element_id(
+            metrics,
+            "net_income",
+        ),
+        metric_element_id(
+            metrics,
+            "total_assets",
+        ),
+        metric_element_id(
+            metrics,
+            "net_assets",
+        ),
+        metric_element_id(
+            metrics,
+            "equity",
+        ),
+        metric_element_id(
+            metrics,
+            "operating_cf",
+        ),
+        metric_element_id(
+            metrics,
+            "investing_cf",
+        ),
+        metric_element_id(
+            metrics,
+            "financing_cf",
+        ),
+        metric_element_id(
+            metrics,
+            "cash",
+        ),
+        metric_element_id(
+            metrics,
+            "eps",
+        ),
+        metric_element_id(
+            metrics,
+            "bps",
+        ),
         metric_element_id(
             metrics,
             "dividend_per_share",
         ),
+        metric_element_id(
+            metrics,
+            "shares_issued",
+        ),
+        metric_source_files(metrics),
         "金融庁EDINET API",
-        EDINET_VIEW_URL.format(doc_id=doc_id),
+        EDINET_VIEW_URL.format(
+            doc_id=doc_id
+        ),
     ]
 
 
@@ -3922,8 +4122,12 @@ def main() -> None:
                     document,
                     metrics,
                     "成功",
+                    is_consolidated_report=(
+                        is_consolidated_report
+                    ),
                 )
             )
+
 
             success_count += 1
 
