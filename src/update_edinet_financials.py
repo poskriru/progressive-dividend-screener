@@ -2497,7 +2497,6 @@ def detect_accounting_standard(
 
     return candidates[0]["value"]
 
-
 def get_fact_accounting_standard_scope(
     fact: dict[str, str],
 ) -> str:
@@ -2510,6 +2509,44 @@ def get_fact_accounting_standard_scope(
         japan_gaap
         neutral
     """
+    # ========================================================
+    # 要素ID・項目名に明示された会計基準を最優先で判定
+    # ========================================================
+
+    explicit_element_id = get_fact_value(
+        fact,
+        [
+            "要素ID",
+            "element_id",
+            "Element ID",
+            "ElementID",
+        ],
+    )
+
+    explicit_label = get_fact_value(
+        fact,
+        [
+            "項目名",
+            "科目名",
+            "item_name",
+            "label",
+        ],
+    )
+
+    explicit_accounting_marker = re.sub(
+        r"\s+",
+        "",
+        normalize_text(
+            f"{explicit_element_id} {explicit_label}"
+        ).upper(),
+    )
+
+    # jpcrp_cor配下にもUS GAAP用要素があるため、
+    # 名前空間などによる日本基準判定より先に処理する。
+    if "USGAAP" in explicit_accounting_marker:
+        return "us_gaap"
+   
+
     element_id = get_fact_value(
         fact,
         [
@@ -2601,7 +2638,17 @@ def fact_matches_accounting_standard(
         return fact_scope == "japan_gaap"
 
     # US GAAPなど、現在個別対応していない基準は
-    # 明らかなIFRS・日本基準要素だけを除外する。
+    # ========================================================
+    # US GAAP書類ではUS GAAP固有要素と中立要素を許可
+    # ========================================================
+
+    if accounting_standard == "US GAAP":
+        return fact_scope in {"us_gaap", "neutral"}
+
+    # ========================================================
+    # 上記以外の未知の会計基準では中立要素だけを許可
+    # ========================================================
+
     return fact_scope == "neutral"
 
 
@@ -3763,6 +3810,7 @@ def main() -> None:
                 f"{doc_id}: "
                 f"決算範囲={consolidation_label}"
             )
+
 
             # =================================================
             # 会計基準と決算範囲を統一して抽出
