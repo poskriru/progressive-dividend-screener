@@ -59,6 +59,7 @@ REQUIRED_HEADERS = [
     "証券コード",
     "書類管理番号",
     "会計基準",
+    "連結区分",
     "売上高（百万円）",
     "営業利益（百万円）",
     "経常利益（百万円）",
@@ -79,8 +80,20 @@ REQUIRED_HEADERS = [
     "抽出エラー",
     "売上高要素ID",
     "営業利益要素ID",
+    "経常利益要素ID",
     "純利益要素ID",
+    "総資産要素ID",
+    "純資産要素ID",
+    "自己資本要素ID",
+    "営業CF要素ID",
+    "投資CF要素ID",
+    "財務CF要素ID",
+    "現金及び現金同等物要素ID",
+    "EPS要素ID",
+    "BPS要素ID",
     "配当要素ID",
+    "発行済株式数要素ID",
+    "CSVファイル",
     "EDINET閲覧URL",
 ]
 
@@ -155,6 +168,53 @@ def normalize_security_code(
         text = text[:4]
 
     return text
+
+def parse_optional_boolean(
+    value: Any,
+) -> bool | None:
+    """
+    連結区分などの値をboolへ変換する。
+
+    判定不能または空文字の場合はNoneを返す。
+    """
+    text = normalize_text(
+        value
+    ).lower()
+
+    if text in {
+        "true",
+        "1",
+        "yes",
+        "有",
+        "あり",
+        "連結",
+    }:
+        return True
+
+    if text in {
+        "false",
+        "0",
+        "no",
+        "無",
+        "なし",
+        "非連結",
+        "個別",
+    }:
+        return False
+
+    if text in {
+        "",
+        "null",
+        "none",
+        "判定不能",
+        "不明",
+    }:
+        return None
+
+    raise RuntimeError(
+        "連結区分を解析できませんでした。"
+        f"値: {value}"
+    )
 
 
 def parse_decimal(
@@ -619,7 +679,13 @@ def build_financial_database_records(
                     )
                     or None
                 ),
-                "is_consolidated": None,
+                "is_consolidated": (
+                    parse_optional_boolean(
+                        row.get(
+                            "連結区分"
+                        )
+                    )
+                ),
                 "revenue_jpy": parse_million_yen(
                     row.get(
                         "売上高（百万円）"
@@ -715,7 +781,7 @@ def build_financial_database_records(
                         "発行済株式数"
                     )
                 ),
-                "revenue_element_id": (
+                                "revenue_element_id": (
                     normalize_text(
                         row.get(
                             "売上高要素ID"
@@ -731,6 +797,14 @@ def build_financial_database_records(
                     )
                     or None
                 ),
+                "ordinary_profit_element_id": (
+                    normalize_text(
+                        row.get(
+                            "経常利益要素ID"
+                        )
+                    )
+                    or None
+                ),
                 "net_income_element_id": (
                     normalize_text(
                         row.get(
@@ -739,10 +813,90 @@ def build_financial_database_records(
                     )
                     or None
                 ),
+                "total_assets_element_id": (
+                    normalize_text(
+                        row.get(
+                            "総資産要素ID"
+                        )
+                    )
+                    or None
+                ),
+                "net_assets_element_id": (
+                    normalize_text(
+                        row.get(
+                            "純資産要素ID"
+                        )
+                    )
+                    or None
+                ),
+                "equity_element_id": (
+                    normalize_text(
+                        row.get(
+                            "自己資本要素ID"
+                        )
+                    )
+                    or None
+                ),
+                "operating_cash_flow_element_id": (
+                    normalize_text(
+                        row.get(
+                            "営業CF要素ID"
+                        )
+                    )
+                    or None
+                ),
+                "investing_cash_flow_element_id": (
+                    normalize_text(
+                        row.get(
+                            "投資CF要素ID"
+                        )
+                    )
+                    or None
+                ),
+                "financing_cash_flow_element_id": (
+                    normalize_text(
+                        row.get(
+                            "財務CF要素ID"
+                        )
+                    )
+                    or None
+                ),
+                "cash_and_equivalents_element_id": (
+                    normalize_text(
+                        row.get(
+                            "現金及び現金同等物要素ID"
+                        )
+                    )
+                    or None
+                ),
+                "eps_element_id": (
+                    normalize_text(
+                        row.get(
+                            "EPS要素ID"
+                        )
+                    )
+                    or None
+                ),
+                "bps_element_id": (
+                    normalize_text(
+                        row.get(
+                            "BPS要素ID"
+                        )
+                    )
+                    or None
+                ),
                 "dividend_element_id": (
                     normalize_text(
                         row.get(
                             "配当要素ID"
+                        )
+                    )
+                    or None
+                ),
+                "issued_shares_element_id": (
+                    normalize_text(
+                        row.get(
+                            "発行済株式数要素ID"
                         )
                     )
                     or None
@@ -758,7 +912,14 @@ def build_financial_database_records(
                     or None
                 ),
                 "source": DATABASE_SOURCE_NAME,
-                "source_file": None,
+                "source_file": (
+                    normalize_text(
+                        row.get(
+                            "CSVファイル"
+                        )
+                    )
+                    or None
+                ),
                 "source_url": (
                     normalize_text(
                         row.get(
@@ -875,8 +1036,19 @@ def save_financials_to_database(
             issued_shares,
             revenue_element_id,
             operating_profit_element_id,
+            ordinary_profit_element_id,
             net_income_element_id,
+            total_assets_element_id,
+            net_assets_element_id,
+            equity_element_id,
+            operating_cash_flow_element_id,
+            investing_cash_flow_element_id,
+            financing_cash_flow_element_id,
+            cash_and_equivalents_element_id,
+            eps_element_id,
+            bps_element_id,
             dividend_element_id,
+            issued_shares_element_id,
             extracted_item_count,
             extraction_status,
             extraction_error,
@@ -909,8 +1081,19 @@ def save_financials_to_database(
             %(issued_shares)s,
             %(revenue_element_id)s,
             %(operating_profit_element_id)s,
+            %(ordinary_profit_element_id)s,
             %(net_income_element_id)s,
+            %(total_assets_element_id)s,
+            %(net_assets_element_id)s,
+            %(equity_element_id)s,
+            %(operating_cash_flow_element_id)s,
+            %(investing_cash_flow_element_id)s,
+            %(financing_cash_flow_element_id)s,
+            %(cash_and_equivalents_element_id)s,
+            %(eps_element_id)s,
+            %(bps_element_id)s,
             %(dividend_element_id)s,
+            %(issued_shares_element_id)s,
             %(extracted_item_count)s,
             %(extraction_status)s,
             %(extraction_error)s,
@@ -1041,17 +1224,83 @@ def save_financials_to_database(
                     screener.annual_financials
                         .operating_profit_element_id
                 ),
+            ordinary_profit_element_id =
+                COALESCE(
+                    EXCLUDED.ordinary_profit_element_id,
+                    screener.annual_financials
+                        .ordinary_profit_element_id
+                ),
             net_income_element_id =
                 COALESCE(
                     EXCLUDED.net_income_element_id,
                     screener.annual_financials
                         .net_income_element_id
                 ),
+            total_assets_element_id =
+                COALESCE(
+                    EXCLUDED.total_assets_element_id,
+                    screener.annual_financials
+                        .total_assets_element_id
+                ),
+            net_assets_element_id =
+                COALESCE(
+                    EXCLUDED.net_assets_element_id,
+                    screener.annual_financials
+                        .net_assets_element_id
+                ),
+            equity_element_id =
+                COALESCE(
+                    EXCLUDED.equity_element_id,
+                    screener.annual_financials
+                        .equity_element_id
+                ),
+            operating_cash_flow_element_id =
+                COALESCE(
+                    EXCLUDED.operating_cash_flow_element_id,
+                    screener.annual_financials
+                        .operating_cash_flow_element_id
+                ),
+            investing_cash_flow_element_id =
+                COALESCE(
+                    EXCLUDED.investing_cash_flow_element_id,
+                    screener.annual_financials
+                        .investing_cash_flow_element_id
+                ),
+            financing_cash_flow_element_id =
+                COALESCE(
+                    EXCLUDED.financing_cash_flow_element_id,
+                    screener.annual_financials
+                        .financing_cash_flow_element_id
+                ),
+            cash_and_equivalents_element_id =
+                COALESCE(
+                    EXCLUDED.cash_and_equivalents_element_id,
+                    screener.annual_financials
+                        .cash_and_equivalents_element_id
+                ),
+            eps_element_id =
+                COALESCE(
+                    EXCLUDED.eps_element_id,
+                    screener.annual_financials
+                        .eps_element_id
+                ),
+            bps_element_id =
+                COALESCE(
+                    EXCLUDED.bps_element_id,
+                    screener.annual_financials
+                        .bps_element_id
+                ),
             dividend_element_id =
                 COALESCE(
                     EXCLUDED.dividend_element_id,
                     screener.annual_financials
                         .dividend_element_id
+                ),
+            issued_shares_element_id =
+                COALESCE(
+                    EXCLUDED.issued_shares_element_id,
+                    screener.annual_financials
+                        .issued_shares_element_id
                 ),
             extracted_item_count =
                 EXCLUDED.extracted_item_count,
@@ -1061,6 +1310,12 @@ def save_financials_to_database(
                 EXCLUDED.extraction_error,
             source =
                 EXCLUDED.source,
+            source_file =
+                COALESCE(
+                    EXCLUDED.source_file,
+                    screener.annual_financials
+                        .source_file
+                ),
             source_url =
                 COALESCE(
                     EXCLUDED.source_url,
@@ -1078,6 +1333,11 @@ def save_financials_to_database(
                 COALESCE(
                     %(accounting_standard)s,
                     accounting_standard
+                ),
+            is_consolidated =
+                COALESCE(
+                    %(is_consolidated)s,
+                    is_consolidated
                 ),
             processing_status =
                 %(processing_status)s,
