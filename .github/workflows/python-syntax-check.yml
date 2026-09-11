@@ -2,9 +2,6 @@ name: Python構文チェック
 
 on:
   pull_request:
-    paths:
-      - "src/**/*.py"
-      - ".github/workflows/python-syntax-check.yml"
 
   workflow_dispatch:
 
