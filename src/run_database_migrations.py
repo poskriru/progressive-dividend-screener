@@ -48,6 +48,11 @@ EXPECTED_TABLES = {
     "annual_financials",
 }
 
+EXPECTED_VIEWS = {
+    "company_screener_base",
+    "company_dividend_metrics",
+}
+
 
 # ============================================================
 # 環境変数
@@ -292,7 +297,7 @@ def verify_database_schema(
     connection: psycopg.Connection,
 ) -> None:
     """
-    必要なテーブルが作成されていることを確認する。
+    必要なテーブルとVIEWが作成されていることを確認する。
     """
 
     with connection.cursor() as cursor:
@@ -311,6 +316,20 @@ def verify_database_schema(
             for row in cursor.fetchall()
         }
 
+        cursor.execute(
+            """
+            SELECT table_name
+            FROM information_schema.views
+            WHERE table_schema = 'screener'
+            ORDER BY table_name
+            """
+        )
+
+        actual_views = {
+            row[0]
+            for row in cursor.fetchall()
+        }
+
     missing_tables = (
         EXPECTED_TABLES - actual_tables
     )
@@ -321,10 +340,27 @@ def verify_database_schema(
             f"不足テーブル: {sorted(missing_tables)}"
         )
 
+    missing_views = (
+        EXPECTED_VIEWS - actual_views
+    )
+
+    if missing_views:
+        raise RuntimeError(
+            "必要なVIEWが作成されていません。"
+            f"不足VIEW: {sorted(missing_views)}"
+        )
+
     print("データベーススキーマを確認しました。")
 
     for table_name in sorted(actual_tables):
-        print(f"作成済みテーブル: screener.{table_name}")
+        print(
+            f"作成済みテーブル: screener.{table_name}"
+        )
+
+    for view_name in sorted(actual_views):
+        print(
+            f"作成済みVIEW: screener.{view_name}"
+        )
 
 
 # ============================================================
