@@ -26,7 +26,6 @@ from typing import Any
 from database import create_database_connection
 
 from update_edinet_financials import (
-    INDICATOR_HEADERS,
     JST,
     create_google_sheets_service,
     get_required_environment_variable,
@@ -51,6 +50,58 @@ ALLOWED_INDICATOR_OUTPUT_SHEET_NAMES = {
 }
 
 MILLION = Decimal("1000000")
+
+DATABASE_INDICATOR_HEADERS = [
+    "更新日時",
+    "株価基準日",
+    "証券コード",
+    "銘柄名",
+    "市場",
+    "終値",
+    "決算期末日",
+    "会計基準",
+    "売上高（百万円）",
+    "営業利益（百万円）",
+    "純利益（百万円）",
+    "総資産（百万円）",
+    "純資産（百万円）",
+    "自己資本（百万円）",
+    "EPS（円）",
+    "BPS（円）",
+    "1株配当（円）",
+    "発行済株式数",
+    "時価総額（百万円）",
+    "PER（倍）",
+    "PBR（倍）",
+    "ROE（%）",
+    "ROA（%）",
+    "自己資本比率（%）",
+    "営業利益率（%）",
+    "純利益率（%）",
+    "配当利回り（%）",
+    "配当性向（%）",
+    "営業CF（百万円）",
+    "投資CF（百万円）",
+    "フリーCF（百万円）",
+    "財務CF（百万円）",
+    "書類管理番号",
+    "EDINET閲覧URL",
+    "配当履歴期数",
+    "判定対象配当期数",
+    "最新年間配当（円）",
+    "前期年間配当（円）",
+    "5期最古年間配当（円）",
+    "5期増配回数",
+    "5期据え置き回数",
+    "5期減配回数",
+    "連続非減配期数",
+    "連続増配期数",
+    "5期配当CAGR（%）",
+    "5期累進配当判定",
+    "累進配当判定状態",
+    "5期配当履歴",
+    "株式分割等未調整",
+]
 
 
 # ============================================================
@@ -216,6 +267,84 @@ def to_sheet_date(
 
     return str(value)
 
+# ============================================================
+# 配当履歴変換
+# ============================================================
+
+def to_sheet_boolean(
+    value: Any,
+) -> bool | str:
+    """
+    PostgreSQLのbooleanをGoogle Sheets用に変換する。
+
+    NULLは空文字にし、判定不能とFALSEを区別する。
+    """
+
+    if value is None:
+        return ""
+
+    return bool(value)
+
+
+def format_dividend_history(
+    fiscal_periods: Any,
+    annual_dividends: Any,
+) -> str:
+    """
+    決算期末日と年間配当の配列を表示用文字列へ変換する。
+    """
+
+    if not isinstance(
+        fiscal_periods,
+        (list, tuple),
+    ):
+        return ""
+
+    if not isinstance(
+        annual_dividends,
+        (list, tuple),
+    ):
+        return ""
+
+    if len(fiscal_periods) != len(
+        annual_dividends
+    ):
+        raise RuntimeError(
+            "配当履歴の日付数と配当数が一致しません。"
+            f"日付数: {len(fiscal_periods)}, "
+            f"配当数: {len(annual_dividends)}"
+        )
+
+    history_items: list[str] = []
+
+    for fiscal_period, annual_dividend in zip(
+        fiscal_periods,
+        annual_dividends,
+        strict=True,
+    ):
+        fiscal_period_text = to_sheet_date(
+            fiscal_period
+        )
+
+        dividend_value = to_sheet_number(
+            annual_dividend
+        )
+
+        if dividend_value == "":
+            dividend_text = "欠損"
+        else:
+            dividend_text = str(
+                dividend_value
+            )
+
+        history_items.append(
+            f"{fiscal_period_text}:{dividend_text}"
+        )
+
+    return " / ".join(
+        history_items
+    )
+
 
 # ============================================================
 # PostgreSQLから株式指標を取得
@@ -223,8 +352,8 @@ def to_sheet_date(
 
 def load_database_indicators() -> list[dict[str, Any]]:
     """
-    company_screener_baseから、
-    株価と財務情報がそろっている銘柄を取得する。
+    company_screener_with_dividendsから、
+    株価・財務情報・累進配当指標を取得する。
     """
 
     query = """
@@ -261,8 +390,23 @@ def load_database_indicators() -> list[dict[str, Any]]:
             free_cash_flow_jpy,
             financing_cash_flow_jpy,
             doc_id,
-            financial_source_url
-        FROM screener.company_screener_base
+            financial_source_url,
+            available_history_period_count,
+            dividend_period_count,
+            dividend_latest_annual_dividend_yen,
+            previous_annual_dividend_yen,
+            oldest_annual_dividend_yen_5y,
+            dividend_increase_count_5y,
+            dividend_unchanged_count_5y,
+            dividend_cut_count_5y,
+            consecutive_non_decrease_periods,
+            consecutive_increase_periods,
+            dividend_cagr_5y_percent,
+            is_progressive_dividend_5y_raw,
+            progressive_dividend_status_5y,
+            fiscal_periods_5y,
+            annual_dividends_yen_5y
+        FROM screener.company_screener_with_dividends
         WHERE annual_financial_id IS NOT NULL
           AND close_price IS NOT NULL
         ORDER BY security_code;
@@ -283,7 +427,7 @@ def load_database_indicators() -> list[dict[str, Any]]:
 
     if not records:
         raise RuntimeError(
-            "company_screener_baseに"
+            "company_screener_with_dividendsに"
             "出力対象データがありません。"
         )
 
@@ -296,13 +440,13 @@ def load_database_indicators() -> list[dict[str, Any]]:
         set(security_codes)
     ):
         raise RuntimeError(
-            "company_screener_baseに"
+            "company_screener_with_dividendsに"
             "証券コードの重複があります。"
         )
 
     print(
-        "PostgreSQLから株式指標を"
-        "取得しました。"
+        "PostgreSQLから株式指標と"
+        "累進配当指標を取得しました。"
         f"件数: {len(records):,}"
     )
 
@@ -318,7 +462,7 @@ def build_indicator_rows(
 ) -> list[list[Any]]:
     """
     PostgreSQLのレコードを、
-    既存の株式指標と同じ列順へ変換する。
+    Google Sheets出力用の列順へ変換する。
     """
 
     updated_at = datetime.now(
@@ -334,9 +478,7 @@ def build_indicator_rows(
             [
                 updated_at,
                 to_sheet_date(
-                    record.get(
-                        "trading_date"
-                    )
+                    record.get("trading_date")
                 ),
                 str(
                     record.get(
@@ -358,14 +500,10 @@ def build_indicator_rows(
                     or ""
                 ),
                 to_sheet_number(
-                    record.get(
-                        "close_price"
-                    )
+                    record.get("close_price")
                 ),
                 to_sheet_date(
-                    record.get(
-                        "fiscal_period_end"
-                    )
+                    record.get("fiscal_period_end")
                 ),
                 str(
                     record.get(
@@ -375,9 +513,7 @@ def build_indicator_rows(
                     or ""
                 ),
                 yen_to_sheet_million(
-                    record.get(
-                        "revenue_jpy"
-                    )
+                    record.get("revenue_jpy")
                 ),
                 yen_to_sheet_million(
                     record.get(
@@ -385,34 +521,22 @@ def build_indicator_rows(
                     )
                 ),
                 yen_to_sheet_million(
-                    record.get(
-                        "net_income_jpy"
-                    )
+                    record.get("net_income_jpy")
                 ),
                 yen_to_sheet_million(
-                    record.get(
-                        "total_assets_jpy"
-                    )
+                    record.get("total_assets_jpy")
                 ),
                 yen_to_sheet_million(
-                    record.get(
-                        "net_assets_jpy"
-                    )
+                    record.get("net_assets_jpy")
                 ),
                 yen_to_sheet_million(
-                    record.get(
-                        "equity_jpy"
-                    )
+                    record.get("equity_jpy")
                 ),
                 to_sheet_number(
-                    record.get(
-                        "eps_yen"
-                    )
+                    record.get("eps_yen")
                 ),
                 to_sheet_number(
-                    record.get(
-                        "bps_yen"
-                    )
+                    record.get("bps_yen")
                 ),
                 to_sheet_number(
                     record.get(
@@ -420,9 +544,7 @@ def build_indicator_rows(
                     )
                 ),
                 to_sheet_integer(
-                    record.get(
-                        "issued_shares"
-                    )
+                    record.get("issued_shares")
                 ),
                 to_sheet_number(
                     record.get(
@@ -430,24 +552,16 @@ def build_indicator_rows(
                     )
                 ),
                 to_sheet_number(
-                    record.get(
-                        "per_ratio"
-                    )
+                    record.get("per_ratio")
                 ),
                 to_sheet_number(
-                    record.get(
-                        "pbr_ratio"
-                    )
+                    record.get("pbr_ratio")
                 ),
                 to_sheet_number(
-                    record.get(
-                        "roe_percent"
-                    )
+                    record.get("roe_percent")
                 ),
                 to_sheet_number(
-                    record.get(
-                        "roa_percent"
-                    )
+                    record.get("roa_percent")
                 ),
                 to_sheet_number(
                     record.get(
@@ -485,9 +599,7 @@ def build_indicator_rows(
                     )
                 ),
                 yen_to_sheet_million(
-                    record.get(
-                        "free_cash_flow_jpy"
-                    )
+                    record.get("free_cash_flow_jpy")
                 ),
                 yen_to_sheet_million(
                     record.get(
@@ -508,6 +620,80 @@ def build_indicator_rows(
                     )
                     or ""
                 ),
+                to_sheet_integer(
+                    record.get(
+                        "available_history_period_count"
+                    )
+                ),
+                to_sheet_integer(
+                    record.get(
+                        "dividend_period_count"
+                    )
+                ),
+                to_sheet_number(
+                    record.get(
+                        "dividend_latest_annual_dividend_yen"
+                    )
+                ),
+                to_sheet_number(
+                    record.get(
+                        "previous_annual_dividend_yen"
+                    )
+                ),
+                to_sheet_number(
+                    record.get(
+                        "oldest_annual_dividend_yen_5y"
+                    )
+                ),
+                to_sheet_integer(
+                    record.get(
+                        "dividend_increase_count_5y"
+                    )
+                ),
+                to_sheet_integer(
+                    record.get(
+                        "dividend_unchanged_count_5y"
+                    )
+                ),
+                to_sheet_integer(
+                    record.get(
+                        "dividend_cut_count_5y"
+                    )
+                ),
+                to_sheet_integer(
+                    record.get(
+                        "consecutive_non_decrease_periods"
+                    )
+                ),
+                to_sheet_integer(
+                    record.get(
+                        "consecutive_increase_periods"
+                    )
+                ),
+                to_sheet_number(
+                    record.get(
+                        "dividend_cagr_5y_percent"
+                    )
+                ),
+                to_sheet_boolean(
+                    record.get(
+                        "is_progressive_dividend_5y_raw"
+                    )
+                ),
+                str(
+                    record.get(
+                        "progressive_dividend_status_5y",
+                        "",
+                    )
+                    or ""
+                ),
+                format_dividend_history(
+                    record.get("fiscal_periods_5y"),
+                    record.get(
+                        "annual_dividends_yen_5y"
+                    ),
+                ),
+                "未調整",
             ]
         )
 
@@ -516,12 +702,13 @@ def build_indicator_rows(
         start=2,
     ):
         if len(row) != len(
-            INDICATOR_HEADERS
+            DATABASE_INDICATOR_HEADERS
         ):
             raise RuntimeError(
                 "株式指標の列数が一致しません。"
                 f"行: {row_number}, "
-                f"期待列数: {len(INDICATOR_HEADERS)}, "
+                "期待列数: "
+                f"{len(DATABASE_INDICATOR_HEADERS)}, "
                 f"実際の列数: {len(row)}"
             )
 
@@ -580,7 +767,7 @@ def main() -> None:
         sheets_service,
         spreadsheet_id,
         output_sheet_name,
-        INDICATOR_HEADERS,
+        DATABASE_INDICATOR_HEADERS,
         indicator_rows,
     )
 
