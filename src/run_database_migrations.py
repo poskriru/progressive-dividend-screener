@@ -51,6 +51,7 @@ EXPECTED_TABLES = {
 EXPECTED_VIEWS = {
     "company_screener_base",
     "company_dividend_metrics",
+    "company_screener_with_dividends",
 }
 
 
