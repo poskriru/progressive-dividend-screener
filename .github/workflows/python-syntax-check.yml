@@ -34,10 +34,16 @@ jobs:
           python-version: "3.12"
 
       # ======================================================
-      # src配下のPython構文チェック
-      #
-      # 外部API、データベース、Google Sheetsには接続しない。
+      # Python構文チェック
       # ======================================================
       - name: Compile Python source files
         run: |
-          python -m compileall -q src
+          python -m compileall -q src tests
+
+      # ======================================================
+      # 単体テスト
+      # ======================================================
+      - name: Run unit tests
+        run: |
+          python -m unittest discover -s tests -v
+
