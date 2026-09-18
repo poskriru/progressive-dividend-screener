@@ -10,6 +10,7 @@ Google Sheetsの「累進配当候補」シートへランキング出力する�
 # 標準ライブラリ
 # ============================================================
 
+import hashlib
 import os
 import sys
 import traceback
@@ -36,6 +37,7 @@ from export_database_indicators import (
 from update_edinet_financials import (
     JST,
     create_google_sheets_service,
+    get_or_create_sheet,
     get_required_environment_variable,
     get_spreadsheet_metadata,
     read_sheet,
@@ -49,6 +51,17 @@ from update_edinet_financials import (
 # ============================================================
 
 CANDIDATE_SHEET_NAME = "累進配当候補"
+CANDIDATE_HISTORY_SHEET_NAME = "累進配当候補_変動履歴"
+
+CANDIDATE_HISTORY_HEADERS = [
+    "イベントID",
+    "検出日時",
+    "変動種別",
+    "証券コード",
+    "銘柄名",
+    "理由",
+    "抽出条件",
+]
 
 CANDIDATE_HEADERS = [
     "更新日時",
@@ -174,6 +187,7 @@ class CandidateCriteria:
 class CandidateChanges:
     """前回出力と今回出力の候補差分。"""
 
+    comparison_id: str
     is_first_export: bool
     added_candidates: tuple[tuple[str, str], ...]
     removed_candidates: tuple[tuple[str, str], ...]
@@ -435,7 +449,7 @@ def build_candidate_rows(
 def load_previous_candidate_snapshot(
     sheets_service,
     spreadsheet_id: str,
-) -> tuple[dict[str, str], bool]:
+) -> tuple[dict[str, str], bool, str]:
     """更新前の候補シートから証券コードと銘柄名を取得する。"""
 
     metadata = get_spreadsheet_metadata(
@@ -453,7 +467,7 @@ def load_previous_candidate_snapshot(
             "累進配当候補シートが未作成のため、"
             "前回候補との差分比較を省略します。"
         )
-        return {}, False
+        return {}, False, ""
 
     values = read_sheet(
         sheets_service,
@@ -462,7 +476,7 @@ def load_previous_candidate_snapshot(
     )
 
     if not values:
-        return {}, True
+        return {}, True, ""
 
     headers = [
         str(value).strip()
@@ -470,6 +484,7 @@ def load_previous_candidate_snapshot(
     ]
 
     required_headers = [
+        "更新日時",
         "証券コード",
         "銘柄名",
     ]
@@ -486,9 +501,11 @@ def load_previous_candidate_snapshot(
             f"不足列: {missing_headers}"
         )
 
+    updated_at_index = headers.index("更新日時")
     code_index = headers.index("証券コード")
     name_index = headers.index("銘柄名")
     snapshot: dict[str, str] = {}
+    snapshot_version = ""
 
     for row in values[1:]:
         if len(row) <= code_index:
@@ -515,12 +532,20 @@ def load_previous_candidate_snapshot(
         )
         snapshot[security_code] = company_name
 
+        if (
+            not snapshot_version
+            and len(row) > updated_at_index
+        ):
+            snapshot_version = str(
+                row[updated_at_index]
+            ).strip()
+
     print(
         "更新前の累進配当候補を読み込みました。"
         f"件数: {len(snapshot):,}"
     )
 
-    return snapshot, True
+    return snapshot, True, snapshot_version
 
 
 def calculate_candidate_changes(
@@ -528,6 +553,7 @@ def calculate_candidate_changes(
     records: list[dict[str, Any]],
     *,
     previous_sheet_exists: bool,
+    previous_snapshot_version: str = "",
 ) -> CandidateChanges:
     """前回候補と今回候補の追加・除外銘柄を算出する。"""
 
@@ -553,8 +579,24 @@ def calculate_candidate_changes(
             record.get("company_name", "") or ""
         )
 
+    comparison_source = "\n".join(
+        [
+            "previous_version=" + previous_snapshot_version,
+            "previous=" + ",".join(
+                sorted(previous_snapshot)
+            ),
+            "current=" + ",".join(
+                sorted(current_snapshot)
+            ),
+        ]
+    )
+    comparison_id = hashlib.sha256(
+        comparison_source.encode("utf-8")
+    ).hexdigest()[:20]
+
     if not previous_sheet_exists:
         return CandidateChanges(
+            comparison_id=comparison_id,
             is_first_export=True,
             added_candidates=(),
             removed_candidates=(),
@@ -574,6 +616,7 @@ def calculate_candidate_changes(
     )
 
     return CandidateChanges(
+        comparison_id=comparison_id,
         is_first_export=False,
         added_candidates=added_candidates,
         removed_candidates=removed_candidates,
@@ -778,6 +821,164 @@ def load_removed_candidate_reasons(
     )
 
     return reasons_by_code
+
+
+# ============================================================
+# 候補変動履歴
+# ============================================================
+
+def build_candidate_change_history_rows(
+    changes: CandidateChanges,
+    removed_reasons: dict[str, tuple[str, ...]],
+    criteria: CandidateCriteria,
+    *,
+    detected_at: datetime | None = None,
+) -> list[list[str]]:
+    """追加・除外された候補を履歴シートの行へ変換する。"""
+
+    if changes.is_first_export or not changes.has_changes:
+        return []
+
+    if detected_at is None:
+        detected_at = datetime.now(JST)
+
+    detected_at_text = detected_at.strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
+    criteria_text = criteria.describe()
+    rows: list[list[str]] = []
+
+    for security_code, company_name in (
+        changes.added_candidates
+    ):
+        rows.append(
+            [
+                f"{changes.comparison_id}:added:{security_code}",
+                detected_at_text,
+                "新規",
+                security_code,
+                company_name,
+                "抽出条件を満たした",
+                criteria_text,
+            ]
+        )
+
+    for security_code, company_name in (
+        changes.removed_candidates
+    ):
+        reasons = removed_reasons.get(
+            security_code,
+            ("理由取得不可",),
+        )
+        rows.append(
+            [
+                f"{changes.comparison_id}:removed:{security_code}",
+                detected_at_text,
+                "除外",
+                security_code,
+                company_name,
+                " / ".join(reasons),
+                criteria_text,
+            ]
+        )
+
+    for row in rows:
+        if len(row) != len(CANDIDATE_HISTORY_HEADERS):
+            raise RuntimeError(
+                "候補変動履歴の列数が一致しません。"
+            )
+
+    return rows
+
+
+def append_candidate_change_history(
+    sheets_service,
+    spreadsheet_id: str,
+    rows: list[list[str]],
+) -> int:
+    """未保存の候補変動だけを履歴シートへ追記する。"""
+
+    if not rows:
+        print(
+            "候補の追加・除外がないため、"
+            "変動履歴の追記を省略します。"
+        )
+        return 0
+
+    get_or_create_sheet(
+        sheets_service,
+        spreadsheet_id,
+        CANDIDATE_HISTORY_SHEET_NAME,
+    )
+    values = read_sheet(
+        sheets_service,
+        spreadsheet_id,
+        CANDIDATE_HISTORY_SHEET_NAME,
+    )
+
+    if not values:
+        write_sheet(
+            sheets_service,
+            spreadsheet_id,
+            CANDIDATE_HISTORY_SHEET_NAME,
+            CANDIDATE_HISTORY_HEADERS,
+            [],
+        )
+        values = [CANDIDATE_HISTORY_HEADERS]
+
+    headers = [
+        str(value).strip()
+        for value in values[0]
+    ]
+
+    if headers != CANDIDATE_HISTORY_HEADERS:
+        raise RuntimeError(
+            "候補変動履歴シートの列が一致しません。"
+            f"期待列: {CANDIDATE_HISTORY_HEADERS}, "
+            f"実際の列: {headers}"
+        )
+
+    existing_event_ids = {
+        str(row[0]).strip()
+        for row in values[1:]
+        if row and str(row[0]).strip()
+    }
+    new_rows = [
+        row
+        for row in rows
+        if row[0] not in existing_event_ids
+    ]
+
+    if not new_rows:
+        print(
+            "候補変動履歴は保存済みのため、"
+            "重複追記を省略します。"
+        )
+        return 0
+
+    (
+        sheets_service.spreadsheets()
+        .values()
+        .append(
+            spreadsheetId=spreadsheet_id,
+            range=(
+                f"'{CANDIDATE_HISTORY_SHEET_NAME}'!A:G"
+            ),
+            valueInputOption="RAW",
+            insertDataOption="INSERT_ROWS",
+            body={
+                "values": new_rows,
+            },
+        )
+        .execute()
+    )
+
+    print(
+        "累進配当候補の変動履歴を追記しました。"
+        f"件数: {len(new_rows):,}"
+    )
+
+    return len(new_rows)
 
 
 # ============================================================
@@ -986,23 +1187,39 @@ def main() -> None:
     sheets_service = create_google_sheets_service(
         service_account_json
     )
-    previous_snapshot, previous_sheet_exists = (
-        load_previous_candidate_snapshot(
-            sheets_service,
-            spreadsheet_id,
-        )
+    (
+        previous_snapshot,
+        previous_sheet_exists,
+        previous_snapshot_version,
+    ) = load_previous_candidate_snapshot(
+        sheets_service,
+        spreadsheet_id,
     )
     records = load_progressive_dividend_candidates(criteria)
     changes = calculate_candidate_changes(
         previous_snapshot,
         records,
         previous_sheet_exists=previous_sheet_exists,
+        previous_snapshot_version=previous_snapshot_version,
     )
     removed_reasons = load_removed_candidate_reasons(
         changes,
         criteria,
     )
+    history_rows = build_candidate_change_history_rows(
+        changes,
+        removed_reasons,
+        criteria,
+    )
     candidate_rows = build_candidate_rows(records)
+
+    # 候補シート更新が失敗して再実行された場合でも、
+    # イベントIDで重複を防げるため履歴を先に保存する。
+    append_candidate_change_history(
+        sheets_service,
+        spreadsheet_id,
+        history_rows,
+    )
 
     write_sheet(
         sheets_service,
