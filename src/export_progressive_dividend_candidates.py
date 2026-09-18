@@ -2,8 +2,8 @@
 PostgreSQLの累進配当指標から投資条件に合う銘柄を抽出し、
 Google Sheetsの「累進配当候補」シートへランキング出力する。
 
-抽出条件はGoogle Sheetsまたは環境変数で変更できる。判定元の年間配当は
-株式分割・株式併合による過年度調整前の値である。
+抽出条件はGoogle Sheetsまたは環境変数で変更できる。J-Quants補正範囲が
+完全な銘柄はadjusted判定を採用し、未充足銘柄はraw判定を維持する。
 """
 
 # ============================================================
@@ -130,6 +130,17 @@ CANDIDATE_HEADERS = [
     "TDnet最新配当表題",
     "TDnet最新配当PDF URL",
     "判定注記",
+    "採用判定種別",
+    "5期累進配当判定_raw",
+    "累進配当判定状態_raw",
+    "配当補正状態",
+    "補正データ範囲充足",
+    "最新累積補正係数",
+    "5期最古累積補正係数",
+    "5期調整済み配当CAGR（%）",
+    "5期調整済み累進配当判定",
+    "調整済み累進配当判定状態",
+    "5期調整済み配当履歴",
 ]
 
 DEFAULT_MIN_DIVIDEND_YIELD_PERCENT = Decimal("3.0")
@@ -141,6 +152,7 @@ DEFAULT_REQUIRE_POSITIVE_FREE_CASH_FLOW = True
 DEFAULT_MAX_CANDIDATES = 300
 
 RAW_DIVIDEND_CAUTION = "株式分割・併合の過年度配当は未調整"
+ADJUSTED_DIVIDEND_NOTE = "J-Quants補正範囲充足のため調整済み判定を採用"
 
 
 # ============================================================
@@ -688,11 +700,26 @@ def load_progressive_dividend_candidates(
             oldest_annual_dividend_yen_5y,
             fiscal_periods_5y,
             annual_dividends_yen_5y,
+            is_progressive_dividend_5y_raw,
+            progressive_dividend_status_5y,
+            dividend_adjustment_status,
+            is_adjustment_coverage_complete,
+            latest_cumulative_adjustment_factor,
+            oldest_cumulative_adjustment_factor_5y,
+            dividend_cagr_5y_adjusted_percent,
+            is_progressive_dividend_5y_adjusted,
+            progressive_dividend_status_5y_adjusted,
+            adjusted_fiscal_periods_5y,
+            adjusted_annual_dividends_yen_5y,
             financial_source_url
         FROM screener.company_screener_with_dividends
         WHERE annual_financial_id IS NOT NULL
           AND close_price IS NOT NULL
-          AND is_progressive_dividend_5y_raw IS TRUE
+          AND CASE
+                WHEN is_adjustment_coverage_complete IS TRUE
+                THEN is_progressive_dividend_5y_adjusted
+                ELSE is_progressive_dividend_5y_raw
+              END IS TRUE
           AND dividend_yield_percent >= %s
           AND payout_ratio_percent BETWEEN 0 AND %s
           AND per_ratio > 0
@@ -703,7 +730,11 @@ def load_progressive_dividend_candidates(
           AND (%s = FALSE OR free_cash_flow_jpy > 0)
         ORDER BY
             dividend_yield_percent DESC NULLS LAST,
-            dividend_cagr_5y_percent DESC NULLS LAST,
+            CASE
+                WHEN is_adjustment_coverage_complete IS TRUE
+                THEN dividend_cagr_5y_adjusted_percent
+                ELSE dividend_cagr_5y_percent
+            END DESC NULLS LAST,
             roe_percent DESC NULLS LAST,
             security_code
         LIMIT %s;
@@ -821,7 +852,55 @@ def build_candidate_rows(
                 record.get("tdnet_dividend_url", "")
                 or ""
             ),
-            RAW_DIVIDEND_CAUTION,
+            (
+                ADJUSTED_DIVIDEND_NOTE
+                if record.get("is_adjustment_coverage_complete") is True
+                else RAW_DIVIDEND_CAUTION
+            ),
+            (
+                "adjusted"
+                if record.get("is_adjustment_coverage_complete") is True
+                else "raw"
+            ),
+            to_sheet_boolean(
+                record.get("is_progressive_dividend_5y_raw")
+            ),
+            str(
+                record.get("progressive_dividend_status_5y", "")
+                or ""
+            ),
+            str(
+                record.get("dividend_adjustment_status", "")
+                or ""
+            ),
+            to_sheet_boolean(
+                record.get("is_adjustment_coverage_complete")
+            ),
+            to_sheet_number(
+                record.get("latest_cumulative_adjustment_factor"),
+                digits=10,
+            ),
+            to_sheet_number(
+                record.get("oldest_cumulative_adjustment_factor_5y"),
+                digits=10,
+            ),
+            to_sheet_number(
+                record.get("dividend_cagr_5y_adjusted_percent")
+            ),
+            to_sheet_boolean(
+                record.get("is_progressive_dividend_5y_adjusted")
+            ),
+            str(
+                record.get(
+                    "progressive_dividend_status_5y_adjusted",
+                    "",
+                )
+                or ""
+            ),
+            format_dividend_history(
+                record.get("adjusted_fiscal_periods_5y"),
+                record.get("adjusted_annual_dividends_yen_5y"),
+            ),
         ]
 
         if len(row) != len(CANDIDATE_HEADERS):
@@ -1057,11 +1136,22 @@ def diagnose_candidate_exclusion(
     ):
         reasons.append("財務・株価データ不足")
 
-    if record.get("is_progressive_dividend_5y_raw") is not True:
-        status = str(
-            record.get("progressive_dividend_status_5y", "")
-            or ""
-        )
+    uses_adjusted = (
+        record.get("is_adjustment_coverage_complete") is True
+    )
+    progressive_field = (
+        "is_progressive_dividend_5y_adjusted"
+        if uses_adjusted
+        else "is_progressive_dividend_5y_raw"
+    )
+    status_field = (
+        "progressive_dividend_status_5y_adjusted"
+        if uses_adjusted
+        else "progressive_dividend_status_5y"
+    )
+
+    if record.get(progressive_field) is not True:
+        status = str(record.get(status_field, "") or "")
         status_labels = {
             "dividend_cut": "5期内に減配",
             "non_positive_dividend": "無配・非正配当",
@@ -1172,6 +1262,9 @@ def load_removed_candidate_reasons(
             close_price,
             is_progressive_dividend_5y_raw,
             progressive_dividend_status_5y,
+            is_adjustment_coverage_complete,
+            is_progressive_dividend_5y_adjusted,
+            progressive_dividend_status_5y_adjusted,
             dividend_yield_percent,
             payout_ratio_percent,
             per_ratio,
@@ -1499,7 +1592,11 @@ def build_discord_notification_description(
                 suffix="%",
             )
             dividend_cagr = format_notification_metric(
-                record.get("dividend_cagr_5y_percent"),
+                record.get(
+                    "dividend_cagr_5y_adjusted_percent"
+                    if record.get("is_adjustment_coverage_complete") is True
+                    else "dividend_cagr_5y_percent"
+                ),
                 suffix="%",
             )
             roe = format_notification_metric(
@@ -1520,9 +1617,14 @@ def build_discord_notification_description(
                 else ""
             )
 
+            decision_label = (
+                "adjusted"
+                if record.get("is_adjustment_coverage_complete") is True
+                else "raw"
+            )
             lines.append(
                 f"{rank}. `{security_code}` {company_name}"
-                f"{marker_text} — "
+                f"{marker_text} [{decision_label}] — "
                 f"利回り {dividend_yield} / "
                 f"5期CAGR {dividend_cagr} / "
                 f"ROE {roe}"
@@ -1531,7 +1633,8 @@ def build_discord_notification_description(
     lines.extend(
         [
             "",
-            f"注意: {RAW_DIVIDEND_CAUTION}",
+            "注意: 補正範囲が完全な銘柄だけadjusted判定を採用し、"
+            "未充足銘柄はraw判定と注記を維持します。",
             "詳細はGoogleスプレッドシートの"
             f"「{CANDIDATE_SHEET_NAME}」を確認してください。",
         ]
@@ -1905,7 +2008,10 @@ def main() -> None:
     )
 
     print(f"累進配当候補の抽出条件: {criteria.describe()}")
-    print(f"判定上の注意: {RAW_DIVIDEND_CAUTION}")
+    print(
+        "判定上の注意: 補正範囲充足時だけadjusted判定を採用し、"
+        "未充足時はraw判定を使用します。"
+    )
     (
         previous_snapshot,
         previous_sheet_exists,

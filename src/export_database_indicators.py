@@ -101,6 +101,18 @@ DATABASE_INDICATOR_HEADERS = [
     "累進配当判定状態",
     "5期配当履歴",
     "株式分割等未調整",
+    "配当補正状態",
+    "補正データ範囲充足",
+    "補正データ開始日",
+    "補正データ終了日",
+    "最新累積補正係数",
+    "5期最古累積補正係数",
+    "最新調整済み年間配当（円）",
+    "5期最古調整済み年間配当（円）",
+    "5期調整済み配当CAGR（%）",
+    "5期調整済み累進配当判定",
+    "調整済み累進配当判定状態",
+    "5期調整済み配当履歴",
 ]
 
 
@@ -405,7 +417,20 @@ def load_database_indicators() -> list[dict[str, Any]]:
             is_progressive_dividend_5y_raw,
             progressive_dividend_status_5y,
             fiscal_periods_5y,
-            annual_dividends_yen_5y
+            annual_dividends_yen_5y,
+            dividend_adjustment_status,
+            is_adjustment_coverage_complete,
+            adjustment_covered_from,
+            adjustment_covered_to,
+            latest_cumulative_adjustment_factor,
+            oldest_cumulative_adjustment_factor_5y,
+            latest_adjusted_annual_dividend_yen,
+            oldest_adjusted_annual_dividend_yen_5y,
+            dividend_cagr_5y_adjusted_percent,
+            is_progressive_dividend_5y_adjusted,
+            progressive_dividend_status_5y_adjusted,
+            adjusted_fiscal_periods_5y,
+            adjusted_annual_dividends_yen_5y
         FROM screener.company_screener_with_dividends
         WHERE annual_financial_id IS NOT NULL
           AND close_price IS NOT NULL
@@ -694,6 +719,69 @@ def build_indicator_rows(
                     ),
                 ),
                 "未調整",
+                str(
+                    record.get(
+                        "dividend_adjustment_status",
+                        "",
+                    )
+                    or ""
+                ),
+                to_sheet_boolean(
+                    record.get(
+                        "is_adjustment_coverage_complete"
+                    )
+                ),
+                to_sheet_date(
+                    record.get("adjustment_covered_from")
+                ),
+                to_sheet_date(
+                    record.get("adjustment_covered_to")
+                ),
+                to_sheet_number(
+                    record.get(
+                        "latest_cumulative_adjustment_factor"
+                    ),
+                    digits=10,
+                ),
+                to_sheet_number(
+                    record.get(
+                        "oldest_cumulative_adjustment_factor_5y"
+                    ),
+                    digits=10,
+                ),
+                to_sheet_number(
+                    record.get(
+                        "latest_adjusted_annual_dividend_yen"
+                    )
+                ),
+                to_sheet_number(
+                    record.get(
+                        "oldest_adjusted_annual_dividend_yen_5y"
+                    )
+                ),
+                to_sheet_number(
+                    record.get(
+                        "dividend_cagr_5y_adjusted_percent"
+                    )
+                ),
+                to_sheet_boolean(
+                    record.get(
+                        "is_progressive_dividend_5y_adjusted"
+                    )
+                ),
+                str(
+                    record.get(
+                        "progressive_dividend_status_5y_adjusted",
+                        "",
+                    )
+                    or ""
+                ),
+                format_dividend_history(
+                    record.get("adjusted_fiscal_periods_5y"),
+                    record.get(
+                        "adjusted_annual_dividends_yen_5y"
+                    ),
+                ),
             ]
         )
 
