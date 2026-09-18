@@ -1133,6 +1133,11 @@ def diagnose_candidate_exclusion(
     ):
         reasons.append("財務・株価データ不足")
 
+    if record.get("is_adjustment_coverage_complete") is not True:
+        reasons.append(
+            "株式分割等補正データ不足"
+        )
+
     uses_adjusted = (
         record.get("is_adjustment_coverage_complete") is True
     )
