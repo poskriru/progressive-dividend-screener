@@ -17,7 +17,12 @@ import hashlib
 import re
 import time
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import (
+    date,
+    datetime,
+    timedelta,
+    timezone,
+)
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from io import BytesIO
 from typing import Any
@@ -32,10 +37,20 @@ import requests
 from bs4 import BeautifulSoup
 
 # ============================================================
+# プロジェクト内モジュール
+# ============================================================
+
+from database import create_database_connection
+
+# ============================================================
 # 定数
 # ============================================================
 
 JPX_SOURCE = "JPX"
+
+DATABASE_APPLICATION_NAME = (
+    "progressive-dividend-jpx-actions"
+)
 
 FACTOR_QUANTUM = Decimal("0.0000000001")
 
@@ -2016,4 +2031,530 @@ def download_and_parse_monthly_sources(
             parsed_source_files
         ),
         actions=actions,
+    )
+
+# ============================================================
+# JPX解析結果のDB保存
+# ============================================================
+
+def get_month_end(value: date) -> date:
+    """指定月の末日を返す。"""
+
+    month_start = normalize_month(
+        value,
+        field_name="対象月",
+    )
+
+    return next_month(
+        month_start
+    ) - timedelta(days=1)
+
+
+def save_failed_monthly_source(
+    source: JpxMonthlyPdfSource,
+    error: Exception,
+) -> None:
+    """月次PDFの取得・解析失敗をDBへ保存する。"""
+
+    if not isinstance(
+        source,
+        JpxMonthlyPdfSource,
+    ):
+        raise RuntimeError(
+            "JPX月次PDF情報の型が不正です。"
+        )
+
+    coverage_start = normalize_month(
+        source.coverage_month,
+        field_name="PDF対象月",
+    )
+
+    if coverage_start != source.coverage_month:
+        raise RuntimeError(
+            "JPX月次PDFの対象年月が"
+            "月初ではありません。"
+        )
+
+    source_url = validate_jpx_monthly_pdf_url(
+        source.source_url
+    )
+    filename_month = extract_month_from_pdf_url(
+        source_url
+    )
+
+    if filename_month != coverage_start:
+        raise RuntimeError(
+            "JPX月次PDFの対象年月と"
+            "ファイル名の年月が一致しません。"
+        )
+
+    coverage_end = get_month_end(
+        coverage_start
+    )
+    fetched_at = datetime.now(timezone.utc)
+    error_text = (
+        f"{type(error).__name__}: {error}"
+    )[:2000]
+
+    with create_database_connection(
+        DATABASE_APPLICATION_NAME
+    ) as connection:
+        with connection.transaction():
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO
+                        screener.jpx_corporate_action_source_files (
+                            source_kind,
+                            coverage_start,
+                            coverage_end,
+                            publication_date,
+                            source_url,
+                            content_sha256,
+                            sync_status,
+                            record_count,
+                            last_error,
+                            fetched_at
+                        )
+                    VALUES (
+                        %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s
+                    )
+                    ON CONFLICT (source_url)
+                    DO UPDATE SET
+                        source_kind =
+                            EXCLUDED.source_kind,
+                        coverage_start =
+                            EXCLUDED.coverage_start,
+                        coverage_end =
+                            EXCLUDED.coverage_end,
+                        publication_date =
+                            COALESCE(
+                                EXCLUDED.publication_date,
+                                screener
+                                    .jpx_corporate_action_source_files
+                                    .publication_date
+                            ),
+                        content_sha256 =
+                            EXCLUDED.content_sha256,
+                        sync_status =
+                            EXCLUDED.sync_status,
+                        record_count =
+                            EXCLUDED.record_count,
+                        last_error =
+                            EXCLUDED.last_error,
+                        fetched_at =
+                            EXCLUDED.fetched_at
+                    """,
+                    (
+                        "monthly_pdf",
+                        coverage_start,
+                        coverage_end,
+                        None,
+                        source_url,
+                        None,
+                        "failed",
+                        0,
+                        error_text,
+                        fetched_at,
+                    ),
+                )
+
+
+def save_complete_jpx_coverage(
+    result: ParsedJpxCoverage,
+) -> None:
+    """完全解析済みのJPX月次PDFと企業行動を一括保存する。"""
+
+    if not isinstance(
+        result,
+        ParsedJpxCoverage,
+    ):
+        raise RuntimeError(
+            "JPX解析結果の型が不正です。"
+        )
+
+    if not result.source_files:
+        raise RuntimeError(
+            "JPX解析結果に取得元ファイルがありません。"
+        )
+
+    normalized_coverage_start = normalize_month(
+        result.coverage_start,
+        field_name="保証開始月",
+    )
+    normalized_coverage_end = normalize_month(
+        result.coverage_end,
+        field_name="保証終了月",
+    )
+
+    if (
+        normalized_coverage_start
+        != result.coverage_start
+        or normalized_coverage_end
+        != result.coverage_end
+    ):
+        raise RuntimeError(
+            "JPX解析結果の保証期間が"
+            "月初ではありません。"
+        )
+
+    required_months = build_month_range(
+        result.coverage_start,
+        result.coverage_end,
+    )
+
+    parsed_sources_by_month: dict[
+        date,
+        ParsedJpxMonthlySource,
+    ] = {}
+
+    for parsed_source in result.source_files:
+        if not isinstance(
+            parsed_source,
+            ParsedJpxMonthlySource,
+        ):
+            raise RuntimeError(
+                "JPX解析済みファイル情報の型が不正です。"
+            )
+
+        source = parsed_source.source
+        coverage_month = normalize_month(
+            source.coverage_month,
+            field_name="PDF対象月",
+        )
+
+        if coverage_month != source.coverage_month:
+            raise RuntimeError(
+                "JPX月次PDFの対象年月が"
+                "月初ではありません。"
+            )
+
+        source_url = validate_jpx_monthly_pdf_url(
+            source.source_url
+        )
+        filename_month = extract_month_from_pdf_url(
+            source_url
+        )
+
+        if filename_month != coverage_month:
+            raise RuntimeError(
+                "JPX月次PDFの対象年月と"
+                "ファイル名の年月が一致しません。"
+            )
+
+        if not re.fullmatch(
+            r"[0-9a-f]{64}",
+            parsed_source.content_sha256,
+        ):
+            raise RuntimeError(
+                "JPX月次PDFのSHA-256が不正です。"
+            )
+
+        if (
+            parsed_source.page_count < 1
+            or parsed_source.table_count < 1
+            or parsed_source.row_count < 1
+        ):
+            raise RuntimeError(
+                "JPX月次PDFの解析件数が不正です。"
+            )
+
+        existing = parsed_sources_by_month.get(
+            coverage_month
+        )
+
+        if existing is not None:
+            if existing != parsed_source:
+                raise RuntimeError(
+                    "同一対象年月に異なる"
+                    "JPX解析済みファイルがあります。"
+                )
+
+            continue
+
+        parsed_sources_by_month[
+            coverage_month
+        ] = parsed_source
+
+    missing_months = tuple(
+        month
+        for month in required_months
+        if month not in parsed_sources_by_month
+    )
+
+    if missing_months:
+        missing_text = ", ".join(
+            month.strftime("%Y-%m")
+            for month in missing_months
+        )
+
+        raise RuntimeError(
+            "JPX解析結果に欠落月があります。"
+            f" missing={missing_text}"
+        )
+
+    unexpected_months = tuple(
+        month
+        for month in parsed_sources_by_month
+        if month not in set(required_months)
+    )
+
+    if unexpected_months:
+        unexpected_text = ", ".join(
+            month.strftime("%Y-%m")
+            for month in sorted(
+                unexpected_months
+            )
+        )
+
+        raise RuntimeError(
+            "JPX解析結果に保証期間外の月があります。"
+            f" unexpected={unexpected_text}"
+        )
+
+    source_url_by_month = {
+        month: parsed_sources_by_month[
+            month
+        ].source.source_url
+        for month in required_months
+    }
+
+    action_rows: list[tuple[Any, ...]] = []
+    action_keys: set[tuple[str, date]] = set()
+
+    for action in result.actions:
+        if not isinstance(
+            action,
+            JpxCorporateAction,
+        ):
+            raise RuntimeError(
+                "JPX企業行動の型が不正です。"
+            )
+
+        action_month = date(
+            action.effective_date.year,
+            action.effective_date.month,
+            1,
+        )
+
+        source_url = source_url_by_month.get(
+            action_month
+        )
+
+        if source_url is None:
+            raise RuntimeError(
+                "JPX企業行動に対応する"
+                "取得元PDFがありません。"
+                f" code={action.security_code},"
+                f" date={action.effective_date}"
+            )
+
+        action_key = (
+            action.security_code,
+            action.effective_date,
+        )
+
+        if action_key in action_keys:
+            raise RuntimeError(
+                "JPX解析結果に同一銘柄・日付の"
+                "重複企業行動があります。"
+                f" code={action.security_code},"
+                f" date={action.effective_date}"
+            )
+
+        action_keys.add(action_key)
+        action_rows.append(
+            (
+                action.security_code,
+                action.effective_date,
+                action.adjustment_factor,
+                action.ex_right_type,
+                JPX_SOURCE,
+                source_url,
+            )
+        )
+
+    fetched_at = datetime.now(timezone.utc)
+
+    source_rows = [
+        (
+            "monthly_pdf",
+            month,
+            get_month_end(month),
+            None,
+            parsed_sources_by_month[
+                month
+            ].source.source_url,
+            parsed_sources_by_month[
+                month
+            ].content_sha256,
+            "complete",
+            len(
+                parsed_sources_by_month[
+                    month
+                ].actions
+            ),
+            None,
+            fetched_at,
+        )
+        for month in required_months
+    ]
+
+    with create_database_connection(
+        DATABASE_APPLICATION_NAME
+    ) as connection:
+        with connection.transaction():
+            with connection.cursor() as cursor:
+                if action_rows:
+                    security_codes = sorted({
+                        row[0]
+                        for row in action_rows
+                    })
+
+                    cursor.execute(
+                        """
+                        SELECT security_code
+                        FROM screener.securities
+                        WHERE security_code = ANY(%s)
+                        """,
+                        (
+                            security_codes,
+                        ),
+                    )
+
+                    existing_security_codes = {
+                        str(
+                            row["security_code"]
+                        ).strip().upper()
+                        for row in cursor.fetchall()
+                    }
+
+                    missing_security_codes = (
+                        set(security_codes)
+                        - existing_security_codes
+                    )
+
+                    if missing_security_codes:
+                        raise RuntimeError(
+                            "JPX企業行動の銘柄が"
+                            "securitiesに存在しません。"
+                            f" missing="
+                            f"{sorted(missing_security_codes)}"
+                        )
+
+                cursor.executemany(
+                    """
+                    INSERT INTO
+                        screener.jpx_corporate_action_source_files (
+                            source_kind,
+                            coverage_start,
+                            coverage_end,
+                            publication_date,
+                            source_url,
+                            content_sha256,
+                            sync_status,
+                            record_count,
+                            last_error,
+                            fetched_at
+                        )
+                    VALUES (
+                        %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s
+                    )
+                    ON CONFLICT (source_url)
+                    DO UPDATE SET
+                        source_kind =
+                            EXCLUDED.source_kind,
+                        coverage_start =
+                            EXCLUDED.coverage_start,
+                        coverage_end =
+                            EXCLUDED.coverage_end,
+                        publication_date =
+                            COALESCE(
+                                EXCLUDED.publication_date,
+                                screener
+                                    .jpx_corporate_action_source_files
+                                    .publication_date
+                            ),
+                        content_sha256 =
+                            EXCLUDED.content_sha256,
+                        sync_status =
+                            EXCLUDED.sync_status,
+                        record_count =
+                            EXCLUDED.record_count,
+                        last_error =
+                            EXCLUDED.last_error,
+                        fetched_at =
+                            EXCLUDED.fetched_at
+                    """,
+                    source_rows,
+                )
+
+                delete_start = result.coverage_start
+                delete_end = get_month_end(
+                    result.coverage_end
+                )
+
+                cursor.execute(
+                    """
+                    DELETE FROM
+                        screener.corporate_actions
+                    WHERE source = %s
+                      AND effective_date
+                            BETWEEN %s AND %s
+                    """,
+                    (
+                        JPX_SOURCE,
+                        delete_start,
+                        delete_end,
+                    ),
+                )
+
+                if action_rows:
+                    action_rows_with_time = [
+                        row + (fetched_at,)
+                        for row in action_rows
+                    ]
+
+                    cursor.executemany(
+                        """
+                        INSERT INTO
+                            screener.corporate_actions (
+                                security_code,
+                                effective_date,
+                                adjustment_factor,
+                                ex_right_type,
+                                source,
+                                source_url,
+                                fetched_at
+                            )
+                        VALUES (
+                            %s, %s, %s, %s,
+                            %s, %s, %s
+                        )
+                        ON CONFLICT (
+                            security_code,
+                            effective_date,
+                            source
+                        )
+                        DO UPDATE SET
+                            adjustment_factor =
+                                EXCLUDED.adjustment_factor,
+                            ex_right_type =
+                                EXCLUDED.ex_right_type,
+                            source_url =
+                                EXCLUDED.source_url,
+                            fetched_at =
+                                EXCLUDED.fetched_at
+                        """,
+                        action_rows_with_time,
+                    )
+
+    print(
+        "JPX企業行動を保存しました。"
+        f"期間={result.coverage_start:%Y-%m}"
+        f"〜{result.coverage_end:%Y-%m}, "
+        f"PDF={len(source_rows):,}件, "
+        f"企業行動={len(action_rows):,}件"
     )
