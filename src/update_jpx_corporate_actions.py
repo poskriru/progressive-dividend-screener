@@ -144,6 +144,31 @@ class JpxMonthlyPdfSource:
     coverage_month: date
     source_url: str
 
+
+@dataclass(frozen=True)
+class ParsedJpxMonthlySource:
+    """取得・解析が完了したJPX月次PDF。"""
+
+    source: JpxMonthlyPdfSource
+    content_sha256: str
+    page_count: int
+    table_count: int
+    row_count: int
+    actions: tuple[JpxCorporateAction, ...]
+
+
+@dataclass(frozen=True)
+class ParsedJpxCoverage:
+    """連続した対象期間のJPX企業行動解析結果。"""
+
+    coverage_start: date
+    coverage_end: date
+    source_files: tuple[
+        ParsedJpxMonthlySource,
+        ...,
+    ]
+    actions: tuple[JpxCorporateAction, ...]
+
 # ============================================================
 # 共通変換
 # ============================================================
@@ -1746,4 +1771,249 @@ def select_monthly_pdf_sources(
     return tuple(
         sources_by_month[month]
         for month in required_months
+    )
+
+# ============================================================
+# JPX月次PDFの一括取得・解析
+# ============================================================
+
+def download_and_parse_monthly_sources(
+    session: requests.Session,
+    sources: tuple[JpxMonthlyPdfSource, ...],
+) -> ParsedJpxCoverage:
+    """選択済みの月次PDFを取得・解析して企業行動を統合する。"""
+
+    if not isinstance(session, requests.Session):
+        raise RuntimeError(
+            "sessionはrequests.Sessionである必要があります。"
+        )
+
+    if not isinstance(sources, tuple):
+        raise RuntimeError(
+            "JPX月次PDF情報がtupleではありません。"
+        )
+
+    if not sources:
+        raise RuntimeError(
+            "取得対象のJPX月次PDF情報が空です。"
+        )
+
+    sources_by_month: dict[
+        date,
+        JpxMonthlyPdfSource,
+    ] = {}
+
+    for source in sources:
+        if not isinstance(
+            source,
+            JpxMonthlyPdfSource,
+        ):
+            raise RuntimeError(
+                "JPX月次PDF情報の型が不正です。"
+            )
+
+        coverage_month = normalize_month(
+            source.coverage_month,
+            field_name="PDF対象月",
+        )
+
+        if coverage_month != source.coverage_month:
+            raise RuntimeError(
+                "JPX月次PDFの対象年月が"
+                "月初ではありません。"
+                f" value={source.coverage_month}"
+            )
+
+        source_url = validate_jpx_monthly_pdf_url(
+            source.source_url
+        )
+        filename_month = extract_month_from_pdf_url(
+            source_url
+        )
+
+        if filename_month is None:
+            raise RuntimeError(
+                "JPX月次PDFのファイル名から"
+                "対象年月を取得できません。"
+                f" URL={source_url}"
+            )
+
+        if filename_month != coverage_month:
+            raise RuntimeError(
+                "JPX月次PDFの対象年月と"
+                "ファイル名の年月が一致しません。"
+                f" expected={coverage_month:%Y-%m},"
+                f" actual={filename_month:%Y-%m},"
+                f" URL={source_url}"
+            )
+
+        normalized_source = JpxMonthlyPdfSource(
+            coverage_month=coverage_month,
+            source_url=source_url,
+        )
+
+        existing = sources_by_month.get(
+            coverage_month
+        )
+
+        if existing is not None:
+            if (
+                existing.source_url
+                != normalized_source.source_url
+            ):
+                raise RuntimeError(
+                    "同一対象年月の異なる"
+                    "JPX月次PDFがあります。"
+                    f" month={coverage_month:%Y-%m},"
+                    f" first={existing.source_url},"
+                    f" second="
+                    f"{normalized_source.source_url}"
+                )
+
+            continue
+
+        sources_by_month[
+            coverage_month
+        ] = normalized_source
+
+    sorted_months = tuple(
+        sorted(sources_by_month)
+    )
+    coverage_start = sorted_months[0]
+    coverage_end = sorted_months[-1]
+
+    required_months = build_month_range(
+        coverage_start,
+        coverage_end,
+    )
+
+    missing_months = tuple(
+        month
+        for month in required_months
+        if month not in sources_by_month
+    )
+
+    if missing_months:
+        missing_text = ", ".join(
+            month.strftime("%Y-%m")
+            for month in missing_months
+        )
+
+        raise RuntimeError(
+            "一括解析するJPX月次PDFに"
+            "欠落月があります。"
+            f" missing={missing_text}"
+        )
+
+    parsed_source_files: list[
+        ParsedJpxMonthlySource
+    ] = []
+    actions_by_key: dict[
+        tuple[str, date],
+        JpxCorporateAction,
+    ] = {}
+
+    for coverage_month in required_months:
+        source = sources_by_month[
+            coverage_month
+        ]
+
+        content = download_monthly_pdf(
+            session,
+            source.source_url,
+        )
+        parsed_pdf = parse_monthly_pdf(
+            content
+        )
+
+        expected_sha256 = hashlib.sha256(
+            content
+        ).hexdigest()
+
+        if (
+            parsed_pdf.content_sha256
+            != expected_sha256
+        ):
+            raise RuntimeError(
+                "JPX月次PDFのSHA-256が"
+                "解析結果と一致しません。"
+                f" month={coverage_month:%Y-%m}"
+            )
+
+        for action in parsed_pdf.actions:
+            action_month = date(
+                action.effective_date.year,
+                action.effective_date.month,
+                1,
+            )
+
+            if action_month != coverage_month:
+                raise RuntimeError(
+                    "JPX月次PDFに対象年月外の"
+                    "企業行動があります。"
+                    f" PDF月={coverage_month:%Y-%m},"
+                    f" code={action.security_code},"
+                    f" effective_date="
+                    f"{action.effective_date}"
+                )
+
+            key = (
+                action.security_code,
+                action.effective_date,
+            )
+            existing_action = actions_by_key.get(
+                key
+            )
+
+            if existing_action is not None:
+                same_action = (
+                    existing_action.adjustment_factor
+                    == action.adjustment_factor
+                    and existing_action.ex_right_type
+                    == action.ex_right_type
+                )
+
+                if not same_action:
+                    raise RuntimeError(
+                        "複数のJPX月次PDFに"
+                        "矛盾する企業行動があります。"
+                        f" code={action.security_code},"
+                        f" effective_date="
+                        f"{action.effective_date}"
+                    )
+
+                continue
+
+            actions_by_key[key] = action
+
+        parsed_source_files.append(
+            ParsedJpxMonthlySource(
+                source=source,
+                content_sha256=(
+                    parsed_pdf.content_sha256
+                ),
+                page_count=parsed_pdf.page_count,
+                table_count=parsed_pdf.table_count,
+                row_count=parsed_pdf.row_count,
+                actions=parsed_pdf.actions,
+            )
+        )
+
+    actions = tuple(
+        sorted(
+            actions_by_key.values(),
+            key=lambda action: (
+                action.effective_date,
+                action.security_code,
+            ),
+        )
+    )
+
+    return ParsedJpxCoverage(
+        coverage_start=coverage_start,
+        coverage_end=coverage_end,
+        source_files=tuple(
+            parsed_source_files
+        ),
+        actions=actions,
     )
