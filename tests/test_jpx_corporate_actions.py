@@ -26,16 +26,19 @@ from update_jpx_corporate_actions import (  # noqa: E402
     MAX_HTML_CONTENT_BYTES,
     JpxCorporateAction,
     JpxMonthlyPdfSource,
+    discover_monthly_pdf_sources,
     download_monthly_page,
     download_monthly_pdf,
     extract_month_from_pdf_url,
     extract_ratio,
     find_effective_date_in_row,
     find_security_code_in_row,
+    merge_monthly_pdf_sources,
     normalize_security_code,
     normalize_text,
     parse_action_description,
     parse_jpx_date,
+    parse_monthly_page_urls,
     parse_monthly_pdf,
     parse_monthly_pdf_sources,
     parse_pdf_table_row,
@@ -1976,6 +1979,417 @@ class JpxMonthlyPageDownloadTest(unittest.TestCase):
             download_monthly_page(
                 MagicMock(),
                 self.INDEX_URL,
+            )
+
+# ============================================================
+# JPXバックナンバー統合テスト
+# ============================================================
+
+class JpxMonthlyArchiveDiscoveryTest(unittest.TestCase):
+    """バックナンバーページの発見とPDF情報統合を検証する。"""
+
+    INDEX_URL = (
+        "https://www.jpx.co.jp/"
+        "markets/statistics-equities/monthly/index.html"
+    )
+
+    ARCHIVE_2024_URL = (
+        "https://www.jpx.co.jp/"
+        "markets/statistics-equities/monthly/"
+        "00-archives-02.html"
+    )
+
+    ARCHIVE_2022_URL = (
+        "https://www.jpx.co.jp/"
+        "markets/statistics-equities/monthly/"
+        "00-archives-04.html"
+    )
+
+    PDF_2022_URL = (
+        "https://www.jpx.co.jp/"
+        "markets/statistics-equities/monthly/"
+        "nlsgeu000006c4e0-att/18_kenri2203.pdf"
+    )
+
+    PDF_2024_URL = (
+        "https://www.jpx.co.jp/"
+        "markets/statistics-equities/monthly/"
+        "mklp77000000luwj-att/17_kenri2410.pdf"
+    )
+
+    def test_anchor_and_option_pages_are_discovered(
+        self,
+    ) -> None:
+        html = """
+        <!doctype html>
+        <html>
+          <body>
+            <a href="00-archives-04.html">
+              2022年
+            </a>
+            <select class="backnumber">
+              <option value="index.html">
+                2026年
+              </option>
+              <option value="00-archives-02.html">
+                2024年
+              </option>
+            </select>
+          </body>
+        </html>
+        """
+
+        page_urls = parse_monthly_page_urls(
+            html,
+            page_url=self.INDEX_URL,
+        )
+
+        self.assertEqual(
+            page_urls,
+            (
+                self.ARCHIVE_2024_URL,
+                self.ARCHIVE_2022_URL,
+                self.INDEX_URL,
+            ),
+        )
+
+    def test_duplicate_page_urls_are_removed(
+        self,
+    ) -> None:
+        html = """
+        <!doctype html>
+        <html>
+          <body>
+            <a href="00-archives-04.html">
+              2022年
+            </a>
+            <option value="00-archives-04.html">
+              2022年
+            </option>
+          </body>
+        </html>
+        """
+
+        page_urls = parse_monthly_page_urls(
+            html,
+            page_url=self.INDEX_URL,
+        )
+
+        self.assertEqual(
+            page_urls,
+            (
+                self.ARCHIVE_2022_URL,
+                self.INDEX_URL,
+            ),
+        )
+
+    def test_unrelated_links_are_ignored(
+        self,
+    ) -> None:
+        html = """
+        <!doctype html>
+        <html>
+          <body>
+            <a href="01.html">ご利用の手引き</a>
+            <a href="/markets/index.html">
+              マーケット情報
+            </a>
+            <a href="00-archives-04.html">
+              2022年
+            </a>
+          </body>
+        </html>
+        """
+
+        page_urls = parse_monthly_page_urls(
+            html,
+            page_url=self.INDEX_URL,
+        )
+
+        self.assertEqual(
+            page_urls,
+            (
+                self.ARCHIVE_2022_URL,
+                self.INDEX_URL,
+            ),
+        )
+
+    def test_external_archive_page_is_rejected(
+        self,
+    ) -> None:
+        html = """
+        <!doctype html>
+        <html>
+          <body>
+            <a href="https://example.com/
+            markets/statistics-equities/monthly/
+            00-archives-04.html">
+              外部ページ
+            </a>
+          </body>
+        </html>
+        """
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "ホスト",
+        ):
+            parse_monthly_page_urls(
+                html,
+                page_url=self.INDEX_URL,
+            )
+
+    def test_index_without_archive_is_rejected(
+        self,
+    ) -> None:
+        html = """
+        <!doctype html>
+        <html>
+          <body>
+            <a href="01.html">
+              ご利用の手引き
+            </a>
+          </body>
+        </html>
+        """
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "バックナンバー",
+        ):
+            parse_monthly_page_urls(
+                html,
+                page_url=self.INDEX_URL,
+            )
+
+    def test_archive_page_can_contain_only_itself(
+        self,
+    ) -> None:
+        html = """
+        <!doctype html>
+        <html>
+          <body>
+            <p>2022年バックナンバー</p>
+          </body>
+        </html>
+        """
+
+        self.assertEqual(
+            parse_monthly_page_urls(
+                html,
+                page_url=self.ARCHIVE_2022_URL,
+            ),
+            (
+                self.ARCHIVE_2022_URL,
+            ),
+        )
+
+    def test_page_count_limit_is_enforced(
+        self,
+    ) -> None:
+        html = """
+        <!doctype html>
+        <html>
+          <body>
+            <a href="00-archives-01.html">2025年</a>
+            <a href="00-archives-02.html">2024年</a>
+          </body>
+        </html>
+        """
+
+        with patch(
+            "update_jpx_corporate_actions."
+            "MAX_MONTHLY_PAGE_COUNT",
+            2,
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "安全上限",
+            ):
+                parse_monthly_page_urls(
+                    html,
+                    page_url=self.INDEX_URL,
+                )
+
+    def test_pdf_source_groups_are_merged_and_sorted(
+        self,
+    ) -> None:
+        source_2022 = JpxMonthlyPdfSource(
+            coverage_month=date(2022, 3, 1),
+            source_url=self.PDF_2022_URL,
+        )
+        source_2024 = JpxMonthlyPdfSource(
+            coverage_month=date(2024, 10, 1),
+            source_url=self.PDF_2024_URL,
+        )
+
+        merged = merge_monthly_pdf_sources(
+            [
+                (source_2024,),
+                (source_2022,),
+                (source_2022,),
+            ]
+        )
+
+        self.assertEqual(
+            merged,
+            (
+                source_2022,
+                source_2024,
+            ),
+        )
+
+    def test_conflicting_pdf_sources_are_rejected(
+        self,
+    ) -> None:
+        first = JpxMonthlyPdfSource(
+            coverage_month=date(2022, 3, 1),
+            source_url=self.PDF_2022_URL,
+        )
+        second = JpxMonthlyPdfSource(
+            coverage_month=date(2022, 3, 1),
+            source_url=(
+                "https://www.jpx.co.jp/"
+                "markets/statistics-equities/monthly/"
+                "another-att/18_kenri2203.pdf"
+            ),
+        )
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "同一対象年月",
+        ):
+            merge_monthly_pdf_sources(
+                [
+                    (first,),
+                    (second,),
+                ]
+            )
+
+    def test_invalid_source_group_is_rejected(
+        self,
+    ) -> None:
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "tuple",
+        ):
+            merge_monthly_pdf_sources(
+                [
+                    [],  # type: ignore[list-item]
+                ]
+            )
+
+    def test_invalid_source_type_is_rejected(
+        self,
+    ) -> None:
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "型",
+        ):
+            merge_monthly_pdf_sources(
+                [
+                    (
+                        "invalid",  # type: ignore[arg-type]
+                    ),
+                ]
+            )
+
+    def test_empty_source_groups_are_rejected(
+        self,
+    ) -> None:
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "取得できませんでした",
+        ):
+            merge_monthly_pdf_sources([])
+
+    def test_all_pages_are_downloaded_and_merged(
+        self,
+    ) -> None:
+        index_html = f"""
+        <!doctype html>
+        <html>
+          <body>
+            <select class="backnumber">
+              <option value="index.html">
+                現在年
+              </option>
+              <option value="00-archives-04.html">
+                2022年
+              </option>
+            </select>
+            <a href="{self.PDF_2024_URL}">
+              2024年10月
+            </a>
+          </body>
+        </html>
+        """
+
+        archive_html = f"""
+        <!doctype html>
+        <html>
+          <body>
+            <a href="{self.PDF_2022_URL}">
+              2022年3月
+            </a>
+          </body>
+        </html>
+        """
+
+        def fake_download(
+            session: requests.Session,
+            page_url: str,
+        ) -> str:
+            del session
+
+            if page_url == self.INDEX_URL:
+                return index_html
+
+            if page_url == self.ARCHIVE_2022_URL:
+                return archive_html
+
+            raise AssertionError(
+                f"予期しないURLです: {page_url}"
+            )
+
+        session = requests.Session()
+
+        with patch(
+            "update_jpx_corporate_actions."
+            "download_monthly_page",
+            side_effect=fake_download,
+        ) as download_mock:
+            sources = discover_monthly_pdf_sources(
+                session
+            )
+
+        self.assertEqual(
+            sources,
+            (
+                JpxMonthlyPdfSource(
+                    coverage_month=date(2022, 3, 1),
+                    source_url=self.PDF_2022_URL,
+                ),
+                JpxMonthlyPdfSource(
+                    coverage_month=date(2024, 10, 1),
+                    source_url=self.PDF_2024_URL,
+                ),
+            ),
+        )
+        self.assertEqual(
+            download_mock.call_count,
+            2,
+        )
+
+    def test_invalid_session_is_rejected(
+        self,
+    ) -> None:
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "requests.Session",
+        ):
+            discover_monthly_pdf_sources(
+                MagicMock()
             )
 
 # ============================================================
