@@ -1,10 +1,12 @@
 """JPX企業行動の表記変換と安全条件を検証する。"""
 
+import hashlib
 import sys
 import unittest
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 
 # ============================================================
@@ -28,7 +30,9 @@ from update_jpx_corporate_actions import (  # noqa: E402
     normalize_text,
     parse_action_description,
     parse_jpx_date,
+    parse_monthly_pdf,
     parse_pdf_table_row,
+    validate_pdf_content,
 )
 
 
@@ -508,6 +512,316 @@ class JpxPdfTableRowParsingTest(unittest.TestCase):
             parse_pdf_table_row(
                 ("9301", "1:2 株式分割")
             )
+
+# ============================================================
+# JPX月次PDF全体の解析
+# ============================================================
+
+class JpxMonthlyPdfParsingTest(unittest.TestCase):
+    """JPX月次PDF全体の安全な解析を検証する。"""
+
+    def create_page(
+        self,
+        *,
+        text: str,
+        tables: list[list[list[object]]],
+    ) -> MagicMock:
+        """pdfplumberのページを模したモックを作成する。"""
+
+        page = MagicMock()
+        page.extract_text.return_value = text
+        page.extract_tables.return_value = tables
+
+        return page
+
+    def parse_with_pages(
+        self,
+        content: bytes,
+        pages: list[MagicMock],
+    ):
+        """指定ページを持つモックPDFを解析する。"""
+
+        pdf = MagicMock()
+        pdf.pages = pages
+        pdf.__enter__.return_value = pdf
+        pdf.__exit__.return_value = False
+
+        with patch(
+            "update_jpx_corporate_actions.pdfplumber.open",
+            return_value=pdf,
+        ):
+            return parse_monthly_pdf(content)
+
+    def test_complete_pdf_is_parsed(
+        self,
+    ) -> None:
+        content = b"%PDF-test-content"
+
+        page = self.create_page(
+            text=(
+                "17 新株落・権利落等一覧 "
+                "(2024年10月)"
+            ),
+            tables=[
+                [
+                    [
+                        "プライム",
+                        "9301",
+                        "三菱倉庫",
+                        "2024.10.30",
+                        "2024.10.31",
+                        "1:2 株式分割",
+                    ],
+                    [
+                        "スタンダード",
+                        "2754",
+                        "東葛ホールディングス",
+                        "2024.10.17",
+                        "2024.10.20",
+                        "10:1 株式併合",
+                    ],
+                ]
+            ],
+        )
+
+        result = self.parse_with_pages(
+            content,
+            [page],
+        )
+
+        self.assertEqual(
+            result.content_sha256,
+            hashlib.sha256(content).hexdigest(),
+        )
+        self.assertEqual(result.page_count, 1)
+        self.assertEqual(result.table_count, 1)
+        self.assertEqual(result.row_count, 2)
+        self.assertEqual(len(result.actions), 2)
+
+        # 権利落ち日、銘柄コードの順で並ぶ。
+        self.assertEqual(
+            result.actions[0].security_code,
+            "2754",
+        )
+        self.assertEqual(
+            result.actions[1].security_code,
+            "9301",
+        )
+
+    def test_multiple_pages_are_all_parsed(
+        self,
+    ) -> None:
+        content = b"%PDF-multiple-pages"
+
+        first_page = self.create_page(
+            text="17 新株落・権利落等一覧",
+            tables=[
+                [
+                    [
+                        "9104",
+                        "商船三井",
+                        "2022.03.30",
+                        "2022.03.31",
+                        "1:3 分割",
+                    ]
+                ]
+            ],
+        )
+
+        second_page = self.create_page(
+            text="2/2",
+            tables=[
+                [
+                    [
+                        "9301",
+                        "三菱倉庫",
+                        "2024.10.30",
+                        "2024.10.31",
+                        "1:2 株式分割",
+                    ]
+                ]
+            ],
+        )
+
+        result = self.parse_with_pages(
+            content,
+            [
+                first_page,
+                second_page,
+            ],
+        )
+
+        self.assertEqual(result.page_count, 2)
+        self.assertEqual(result.table_count, 2)
+        self.assertEqual(result.row_count, 2)
+        self.assertEqual(len(result.actions), 2)
+
+    def test_duplicate_identical_action_is_deduplicated(
+        self,
+    ) -> None:
+        content = b"%PDF-duplicate"
+
+        duplicate_row = [
+            "9301",
+            "三菱倉庫",
+            "2024.10.30",
+            "2024.10.31",
+            "1:2 株式分割",
+        ]
+
+        page = self.create_page(
+            text="17 新株落・権利落等一覧",
+            tables=[
+                [
+                    duplicate_row,
+                    duplicate_row,
+                ]
+            ],
+        )
+
+        result = self.parse_with_pages(
+            content,
+            [page],
+        )
+
+        self.assertEqual(result.row_count, 2)
+        self.assertEqual(len(result.actions), 1)
+
+    def test_conflicting_duplicate_action_is_rejected(
+        self,
+    ) -> None:
+        content = b"%PDF-conflict"
+
+        page = self.create_page(
+            text="17 新株落・権利落等一覧",
+            tables=[
+                [
+                    [
+                        "9301",
+                        "三菱倉庫",
+                        "2024.10.30",
+                        "2024.10.31",
+                        "1:2 株式分割",
+                    ],
+                    [
+                        "9301",
+                        "三菱倉庫",
+                        "2024.10.30",
+                        "2024.10.31",
+                        "1:3 株式分割",
+                    ],
+                ]
+            ],
+        )
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "矛盾する企業行動",
+        ):
+            self.parse_with_pages(
+                content,
+                [page],
+            )
+
+    def test_non_bytes_content_is_rejected(
+        self,
+    ) -> None:
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "bytesではありません",
+        ):
+            validate_pdf_content(
+                "%PDF-text"
+            )
+
+    def test_empty_content_is_rejected(
+        self,
+    ) -> None:
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "内容が空",
+        ):
+            validate_pdf_content(b"")
+
+    def test_non_pdf_content_is_rejected(
+        self,
+    ) -> None:
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "PDFではありません",
+        ):
+            validate_pdf_content(
+                b"<html>error</html>"
+            )
+
+    def test_pdf_without_pages_is_rejected(
+        self,
+    ) -> None:
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "ページがありません",
+        ):
+            self.parse_with_pages(
+                b"%PDF-no-pages",
+                [],
+            )
+
+    def test_pdf_without_expected_title_is_rejected(
+        self,
+    ) -> None:
+        page = self.create_page(
+            text="別のPDF資料",
+            tables=[
+                [
+                    [
+                        "9301",
+                        "2024.10.30",
+                        "1:2 株式分割",
+                    ]
+                ]
+            ],
+        )
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "タイトル",
+        ):
+            self.parse_with_pages(
+                b"%PDF-wrong-title",
+                [page],
+            )
+
+    def test_pdf_without_tables_is_rejected(
+        self,
+    ) -> None:
+        page = self.create_page(
+            text="17 新株落・権利落等一覧",
+            tables=[],
+        )
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "表を1件も",
+        ):
+            self.parse_with_pages(
+                b"%PDF-no-tables",
+                [page],
+            )
+
+    def test_unexpected_pdfplumber_error_is_wrapped(
+        self,
+    ) -> None:
+        with patch(
+            "update_jpx_corporate_actions.pdfplumber.open",
+            side_effect=ValueError("broken pdf"),
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "PDFの解析に失敗",
+            ):
+                parse_monthly_pdf(
+                    b"%PDF-broken"
+                )
 
 # ============================================================
 # エントリーポイント
