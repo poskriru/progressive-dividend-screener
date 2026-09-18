@@ -1599,6 +1599,17 @@ def main() -> None:
         removed_reasons,
     )
 
+    # 配当履歴の株式分割等未調整リスクを確認するため、
+    # 発行済株式数が大幅に変化した期間も同時に出力する。
+    from export_corporate_action_candidates import (
+        export_corporate_action_candidates,
+    )
+
+    export_corporate_action_candidates(
+        sheets_service,
+        spreadsheet_id,
+    )
+
 
 # ============================================================
 # エントリーポイント
