@@ -778,6 +778,15 @@ def main() -> None:
         f"件数: {len(indicator_rows):,}"
     )
 
+    if output_sheet_name == PRODUCTION_INDICATOR_SHEET_NAME:
+        # 本番株式指標と同じデータ更新タイミングで、
+        # 条件に合う候補シートも一貫して更新する。
+        from export_progressive_dividend_candidates import (
+            main as export_progressive_dividend_candidates,
+        )
+
+        export_progressive_dividend_candidates()
+
 
 # ============================================================
 # エントリーポイント
