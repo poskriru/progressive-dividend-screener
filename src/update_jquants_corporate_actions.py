@@ -530,22 +530,61 @@ def save_complete_result(
 
                 status_rows = []
                 for security_code in sorted(security_codes):
-                    observed = observed_ranges.get(security_code)
+                    observed = observed_ranges.get(
+                        security_code
+                    )
+                    is_observed = observed is not None
+
                     status_rows.append(
                         (
                             security_code,
                             requested_from,
                             requested_to,
-                            requested_from,
-                            requested_to,
-                            observed[0] if observed else None,
-                            observed[1] if observed else None,
-                            "complete",
-                            api_record_counts.get(security_code, 0),
-                            action_count_by_code.get(security_code, 0),
+                            (
+                                requested_from
+                                if is_observed
+                                else None
+                            ),
+                            (
+                                requested_to
+                                if is_observed
+                                else None
+                            ),
+                            (
+                                observed[0]
+                                if is_observed
+                                else None
+                            ),
+                            (
+                                observed[1]
+                                if is_observed
+                                else None
+                            ),
+                            (
+                                "complete"
+                                if is_observed
+                                else "partial"
+                            ),
+                            api_record_counts.get(
+                                security_code,
+                                0,
+                            ),
+                            action_count_by_code.get(
+                                security_code,
+                                0,
+                            ),
+                            (
+                                None
+                                if is_observed
+                                else (
+                                    "対象期間中にJ-Quantsの"
+                                    "日次レコードを確認できませんでした。"
+                                )
+                            ),
                             fetched_at,
                         )
                     )
+
 
                 cursor.executemany(
                     """
@@ -562,31 +601,57 @@ def save_complete_result(
                         action_record_count,
                         last_error,
                         fetched_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, %s)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (security_code)
                     DO UPDATE SET
                         requested_from = EXCLUDED.requested_from,
                         requested_to = EXCLUDED.requested_to,
-                        covered_from = LEAST(
-                            screener.jquants_adjustment_sync_status.covered_from,
-                            EXCLUDED.covered_from
-                        ),
-                        covered_to = GREATEST(
-                            screener.jquants_adjustment_sync_status.covered_to,
-                            EXCLUDED.covered_to
-                        ),
-                        first_observed_date = LEAST(
+                        covered_from = CASE
+                            WHEN EXCLUDED.sync_status = 'complete'
+                            THEN COALESCE(
+                                LEAST(
+                                    screener.jquants_adjustment_sync_status.covered_from,
+                                    EXCLUDED.covered_from
+                                ),
+                                screener.jquants_adjustment_sync_status.covered_from,
+                                EXCLUDED.covered_from
+                            )
+                            ELSE
+                                screener.jquants_adjustment_sync_status.covered_from
+                        END,
+                        covered_to = CASE
+                            WHEN EXCLUDED.sync_status = 'complete'
+                            THEN COALESCE(
+                                GREATEST(
+                                    screener.jquants_adjustment_sync_status.covered_to,
+                                    EXCLUDED.covered_to
+                                ),
+                                screener.jquants_adjustment_sync_status.covered_to,
+                                EXCLUDED.covered_to
+                            )
+                            ELSE
+                                screener.jquants_adjustment_sync_status.covered_to
+                        END,
+                        first_observed_date = COALESCE(
+                            LEAST(
+                                screener.jquants_adjustment_sync_status.first_observed_date,
+                                EXCLUDED.first_observed_date
+                            ),
                             screener.jquants_adjustment_sync_status.first_observed_date,
                             EXCLUDED.first_observed_date
                         ),
-                        last_observed_date = GREATEST(
+                        last_observed_date = COALESCE(
+                            GREATEST(
+                                screener.jquants_adjustment_sync_status.last_observed_date,
+                                EXCLUDED.last_observed_date
+                            ),
                             screener.jquants_adjustment_sync_status.last_observed_date,
                             EXCLUDED.last_observed_date
                         ),
-                        sync_status = 'complete',
+                        sync_status = EXCLUDED.sync_status,
                         api_record_count = EXCLUDED.api_record_count,
                         action_record_count = EXCLUDED.action_record_count,
-                        last_error = NULL,
+                        last_error = EXCLUDED.last_error,
                         fetched_at = EXCLUDED.fetched_at
                     """,
                     status_rows,
