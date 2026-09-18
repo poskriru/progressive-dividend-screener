@@ -86,6 +86,7 @@ MAX_DOWNLOAD_RETRIES = 4
 MAX_PDF_CONTENT_BYTES = 25 * 1024 * 1024
 MAX_HTML_CONTENT_BYTES = 5 * 1024 * 1024
 MAX_MONTHLY_PAGE_COUNT = 50
+MAX_COVERAGE_MONTH_COUNT = 240
 
 HTTP_USER_AGENT = (
     "progressive-dividend-screener/"
@@ -1547,4 +1548,202 @@ def discover_monthly_pdf_sources(
 
     return merge_monthly_pdf_sources(
         source_groups
+    )
+
+# ============================================================
+# JPX月次PDFの対象期間選択
+# ============================================================
+
+def normalize_month(
+    value: Any,
+    *,
+    field_name: str,
+) -> date:
+    """日付を対象月の月初へ正規化する。"""
+
+    if not isinstance(value, date):
+        raise RuntimeError(
+            f"{field_name}がdateではありません。"
+        )
+
+    return date(
+        value.year,
+        value.month,
+        1,
+    )
+
+
+def next_month(value: date) -> date:
+    """翌月の月初を返す。"""
+
+    normalized = normalize_month(
+        value,
+        field_name="対象月",
+    )
+
+    if normalized.month == 12:
+        return date(
+            normalized.year + 1,
+            1,
+            1,
+        )
+
+    return date(
+        normalized.year,
+        normalized.month + 1,
+        1,
+    )
+
+
+def build_month_range(
+    coverage_start: date,
+    coverage_end: date,
+) -> tuple[date, ...]:
+    """開始月から終了月までの月初一覧を生成する。"""
+
+    normalized_start = normalize_month(
+        coverage_start,
+        field_name="取得開始月",
+    )
+    normalized_end = normalize_month(
+        coverage_end,
+        field_name="取得終了月",
+    )
+
+    if normalized_start > normalized_end:
+        raise RuntimeError(
+            "取得開始月が取得終了月より後です。"
+            f" start={normalized_start:%Y-%m},"
+            f" end={normalized_end:%Y-%m}"
+        )
+
+    months: list[date] = []
+    current_month = normalized_start
+
+    while current_month <= normalized_end:
+        months.append(current_month)
+
+        if len(months) > MAX_COVERAGE_MONTH_COUNT:
+            raise RuntimeError(
+                "JPX月次PDFの取得対象月数が"
+                "安全上限を超えています。"
+            )
+
+        current_month = next_month(
+            current_month
+        )
+
+    return tuple(months)
+
+
+def select_monthly_pdf_sources(
+    sources: tuple[JpxMonthlyPdfSource, ...],
+    *,
+    coverage_start: date,
+    coverage_end: date,
+) -> tuple[JpxMonthlyPdfSource, ...]:
+    """指定期間に必要な月次PDFだけを欠落なく選択する。"""
+
+    if not isinstance(sources, tuple):
+        raise RuntimeError(
+            "JPX月次PDF情報がtupleではありません。"
+        )
+
+    required_months = build_month_range(
+        coverage_start,
+        coverage_end,
+    )
+    required_month_set = set(required_months)
+
+    sources_by_month: dict[
+        date,
+        JpxMonthlyPdfSource,
+    ] = {}
+
+    for source in sources:
+        if not isinstance(
+            source,
+            JpxMonthlyPdfSource,
+        ):
+            raise RuntimeError(
+                "JPX月次PDF情報の型が不正です。"
+            )
+
+        normalized_source_month = normalize_month(
+            source.coverage_month,
+            field_name="PDF対象月",
+        )
+
+        if (
+            normalized_source_month
+            != source.coverage_month
+        ):
+            raise RuntimeError(
+                "JPX月次PDFの対象年月が"
+                "月初ではありません。"
+                f" value={source.coverage_month}"
+            )
+
+        validated_source_url = (
+            validate_jpx_monthly_pdf_url(
+                source.source_url
+            )
+        )
+
+        if (
+            normalized_source_month
+            not in required_month_set
+        ):
+            continue
+
+        normalized_source = JpxMonthlyPdfSource(
+            coverage_month=normalized_source_month,
+            source_url=validated_source_url,
+        )
+
+        existing = sources_by_month.get(
+            normalized_source_month
+        )
+
+        if existing is not None:
+            if (
+                existing.source_url
+                != normalized_source.source_url
+            ):
+                raise RuntimeError(
+                    "取得対象期間に同一対象年月の"
+                    "異なるJPX月次PDFがあります。"
+                    f" month="
+                    f"{normalized_source_month:%Y-%m},"
+                    f" first={existing.source_url},"
+                    f" second="
+                    f"{normalized_source.source_url}"
+                )
+
+            continue
+
+        sources_by_month[
+            normalized_source_month
+        ] = normalized_source
+
+    missing_months = tuple(
+        month
+        for month in required_months
+        if month not in sources_by_month
+    )
+
+    if missing_months:
+        missing_text = ", ".join(
+            month.strftime("%Y-%m")
+            for month in missing_months
+        )
+
+        raise RuntimeError(
+            "取得対象期間のJPX月次PDFが不足しています。"
+            f" missing={missing_text}"
+        )
+
+    return tuple(
+        sources_by_month[month]
+        for month in required_months
     )
