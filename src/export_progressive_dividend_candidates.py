@@ -37,6 +37,8 @@ from update_edinet_financials import (
     JST,
     create_google_sheets_service,
     get_required_environment_variable,
+    get_spreadsheet_metadata,
+    read_sheet,
     send_discord_notification,
     write_sheet,
 )
@@ -165,6 +167,24 @@ class CandidateCriteria:
             f"ROE>={self.min_roe_percent}%, "
             f"フリーCF={free_cash_flow_condition}, "
             f"最大{self.max_candidates}件"
+        )
+
+
+@dataclass(frozen=True)
+class CandidateChanges:
+    """前回出力と今回出力の候補差分。"""
+
+    is_first_export: bool
+    added_candidates: tuple[tuple[str, str], ...]
+    removed_candidates: tuple[tuple[str, str], ...]
+
+    @property
+    def has_changes(self) -> bool:
+        """候補の追加または除外がある場合にTRUEを返す。"""
+
+        return bool(
+            self.added_candidates
+            or self.removed_candidates
         )
 
 
@@ -409,6 +429,158 @@ def build_candidate_rows(
 
 
 # ============================================================
+# 前回候補との差分
+# ============================================================
+
+def load_previous_candidate_snapshot(
+    sheets_service,
+    spreadsheet_id: str,
+) -> tuple[dict[str, str], bool]:
+    """更新前の候補シートから証券コードと銘柄名を取得する。"""
+
+    metadata = get_spreadsheet_metadata(
+        sheets_service,
+        spreadsheet_id,
+    )
+    sheet_exists = any(
+        sheet.get("properties", {}).get("title")
+        == CANDIDATE_SHEET_NAME
+        for sheet in metadata.get("sheets", [])
+    )
+
+    if not sheet_exists:
+        print(
+            "累進配当候補シートが未作成のため、"
+            "前回候補との差分比較を省略します。"
+        )
+        return {}, False
+
+    values = read_sheet(
+        sheets_service,
+        spreadsheet_id,
+        CANDIDATE_SHEET_NAME,
+    )
+
+    if not values:
+        return {}, True
+
+    headers = [
+        str(value).strip()
+        for value in values[0]
+    ]
+
+    required_headers = [
+        "証券コード",
+        "銘柄名",
+    ]
+    missing_headers = [
+        header
+        for header in required_headers
+        if header not in headers
+    ]
+
+    if missing_headers:
+        raise RuntimeError(
+            "更新前の累進配当候補シートに"
+            "必要な列がありません。"
+            f"不足列: {missing_headers}"
+        )
+
+    code_index = headers.index("証券コード")
+    name_index = headers.index("銘柄名")
+    snapshot: dict[str, str] = {}
+
+    for row in values[1:]:
+        if len(row) <= code_index:
+            continue
+
+        security_code = str(
+            row[code_index]
+        ).strip().upper()
+
+        if not security_code:
+            continue
+
+        if security_code in snapshot:
+            raise RuntimeError(
+                "更新前の累進配当候補シートに"
+                "証券コードの重複があります。"
+                f"証券コード: {security_code}"
+            )
+
+        company_name = (
+            str(row[name_index]).strip()
+            if len(row) > name_index
+            else ""
+        )
+        snapshot[security_code] = company_name
+
+    print(
+        "更新前の累進配当候補を読み込みました。"
+        f"件数: {len(snapshot):,}"
+    )
+
+    return snapshot, True
+
+
+def calculate_candidate_changes(
+    previous_snapshot: dict[str, str],
+    records: list[dict[str, Any]],
+    *,
+    previous_sheet_exists: bool,
+) -> CandidateChanges:
+    """前回候補と今回候補の追加・除外銘柄を算出する。"""
+
+    current_snapshot: dict[str, str] = {}
+
+    for record in records:
+        security_code = str(
+            record.get("security_code", "")
+        ).strip().upper()
+
+        if not security_code:
+            raise RuntimeError(
+                "累進配当候補に証券コードが空の行があります。"
+            )
+
+        if security_code in current_snapshot:
+            raise RuntimeError(
+                "累進配当候補に証券コードの重複があります。"
+                f"証券コード: {security_code}"
+            )
+
+        current_snapshot[security_code] = str(
+            record.get("company_name", "") or ""
+        )
+
+    if not previous_sheet_exists:
+        return CandidateChanges(
+            is_first_export=True,
+            added_candidates=(),
+            removed_candidates=(),
+        )
+
+    added_candidates = tuple(
+        (security_code, company_name)
+        for security_code, company_name
+        in current_snapshot.items()
+        if security_code not in previous_snapshot
+    )
+    removed_candidates = tuple(
+        (security_code, company_name)
+        for security_code, company_name
+        in previous_snapshot.items()
+        if security_code not in current_snapshot
+    )
+
+    return CandidateChanges(
+        is_first_export=False,
+        added_candidates=added_candidates,
+        removed_candidates=removed_candidates,
+    )
+
+
+# ============================================================
 # Discord通知
 # ============================================================
 
@@ -437,10 +609,11 @@ def format_notification_metric(
 def build_discord_notification_description(
     records: list[dict[str, Any]],
     criteria: CandidateCriteria,
+    changes: CandidateChanges,
     *,
     display_limit: int = 10,
 ) -> str:
-    """候補件数・抽出条件・上位銘柄をDiscord通知文にする。"""
+    """候補件数・差分・抽出条件・上位銘柄を通知文にする。"""
 
     if display_limit < 1:
         raise ValueError(
@@ -449,9 +622,43 @@ def build_discord_notification_description(
 
     lines = [
         f"抽出件数: **{len(records):,}件**",
-        f"抽出条件: {criteria.describe()}",
-        "",
     ]
+
+    if changes.is_first_export:
+        lines.append(
+            "前回比: 初回出力のため比較なし"
+        )
+    elif changes.has_changes:
+        lines.append(
+            "前回比: "
+            f"新規 **{len(changes.added_candidates):,}件** / "
+            f"除外 **{len(changes.removed_candidates):,}件**"
+        )
+
+        if changes.added_candidates:
+            added_text = ", ".join(
+                f"`{code}` {name}"
+                for code, name
+                in changes.added_candidates[:display_limit]
+            )
+            lines.append(f"新規: {added_text}")
+
+        if changes.removed_candidates:
+            removed_text = ", ".join(
+                f"`{code}` {name}"
+                for code, name
+                in changes.removed_candidates[:display_limit]
+            )
+            lines.append(f"除外: {removed_text}")
+    else:
+        lines.append("前回比: **変更なし**")
+
+    lines.extend(
+        [
+            f"抽出条件: {criteria.describe()}",
+            "",
+        ]
+    )
 
     if not records:
         lines.extend(
@@ -510,6 +717,7 @@ def build_discord_notification_description(
 def notify_discord_candidates(
     records: list[dict[str, Any]],
     criteria: CandidateCriteria,
+    changes: CandidateChanges,
 ) -> None:
     """Webhook設定時だけ累進配当候補の更新結果を通知する。"""
 
@@ -528,6 +736,7 @@ def notify_discord_candidates(
     description = build_discord_notification_description(
         records,
         criteria,
+        changes,
     )
 
     send_discord_notification(
@@ -563,7 +772,18 @@ def main() -> None:
     sheets_service = create_google_sheets_service(
         service_account_json
     )
+    previous_snapshot, previous_sheet_exists = (
+        load_previous_candidate_snapshot(
+            sheets_service,
+            spreadsheet_id,
+        )
+    )
     records = load_progressive_dividend_candidates(criteria)
+    changes = calculate_candidate_changes(
+        previous_snapshot,
+        records,
+        previous_sheet_exists=previous_sheet_exists,
+    )
     candidate_rows = build_candidate_rows(records)
 
     write_sheet(
@@ -583,6 +803,7 @@ def main() -> None:
     notify_discord_candidates(
         records,
         criteria,
+        changes,
     )
 
 
