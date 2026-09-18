@@ -8,6 +8,7 @@ from decimal import Decimal
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import requests
 
 # ============================================================
 # テスト対象の読み込み
@@ -23,6 +24,7 @@ sys.path.insert(
 
 from update_jpx_corporate_actions import (  # noqa: E402
     JpxCorporateAction,
+    download_monthly_pdf,
     extract_ratio,
     find_effective_date_in_row,
     find_security_code_in_row,
@@ -32,6 +34,7 @@ from update_jpx_corporate_actions import (  # noqa: E402
     parse_jpx_date,
     parse_monthly_pdf,
     parse_pdf_table_row,
+    validate_jpx_monthly_pdf_url,
     validate_pdf_content,
 )
 
@@ -822,6 +825,398 @@ class JpxMonthlyPdfParsingTest(unittest.TestCase):
                 parse_monthly_pdf(
                     b"%PDF-broken"
                 )
+
+# ============================================================
+# JPX月次PDFのダウンロード
+# ============================================================
+
+class JpxMonthlyPdfDownloadTest(unittest.TestCase):
+    """JPX月次PDFのURL制限と取得処理を検証する。"""
+
+    VALID_URL = (
+        "https://www.jpx.co.jp/"
+        "markets/statistics-equities/monthly/"
+        "example-att/17_kenri2607.pdf"
+    )
+
+    def create_response(
+        self,
+        *,
+        status_code: int = 200,
+        url: str | None = None,
+        chunks: list[bytes] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> MagicMock:
+        """requests.Responseを模したモックを作成する。"""
+
+        response = MagicMock(
+            spec=requests.Response
+        )
+        response.status_code = status_code
+        response.url = url or self.VALID_URL
+        response.headers = headers or {}
+        response.iter_content.return_value = iter(
+            chunks
+            if chunks is not None
+            else [b"%PDF-test"]
+        )
+
+        if status_code >= 400:
+            response.raise_for_status.side_effect = (
+                requests.HTTPError(
+                    f"HTTP {status_code}",
+                    response=response,
+                )
+            )
+        else:
+            response.raise_for_status.return_value = None
+
+        return response
+
+    def test_official_monthly_pdf_url_is_accepted(
+        self,
+    ) -> None:
+        self.assertEqual(
+            validate_jpx_monthly_pdf_url(
+                self.VALID_URL
+            ),
+            self.VALID_URL,
+        )
+
+    def test_http_url_is_rejected(
+        self,
+    ) -> None:
+        invalid_url = self.VALID_URL.replace(
+            "https://",
+            "http://",
+        )
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "https",
+        ):
+            validate_jpx_monthly_pdf_url(
+                invalid_url
+            )
+
+    def test_other_host_is_rejected(
+        self,
+    ) -> None:
+        invalid_url = self.VALID_URL.replace(
+            "www.jpx.co.jp",
+            "example.com",
+        )
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "ホスト",
+        ):
+            validate_jpx_monthly_pdf_url(
+                invalid_url
+            )
+
+    def test_host_suffix_attack_is_rejected(
+        self,
+    ) -> None:
+        invalid_url = self.VALID_URL.replace(
+            "www.jpx.co.jp",
+            "www.jpx.co.jp.example.com",
+        )
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "ホスト",
+        ):
+            validate_jpx_monthly_pdf_url(
+                invalid_url
+            )
+
+    def test_non_standard_port_is_rejected(
+        self,
+    ) -> None:
+        invalid_url = self.VALID_URL.replace(
+            "www.jpx.co.jp",
+            "www.jpx.co.jp:8443",
+        )
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "標準HTTPS",
+        ):
+            validate_jpx_monthly_pdf_url(
+                invalid_url
+            )
+
+    def test_query_string_is_rejected(
+        self,
+    ) -> None:
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "クエリ",
+        ):
+            validate_jpx_monthly_pdf_url(
+                self.VALID_URL + "?download=1"
+            )
+
+    def test_path_traversal_is_rejected(
+        self,
+    ) -> None:
+        invalid_url = (
+            "https://www.jpx.co.jp/"
+            "markets/statistics-equities/monthly/"
+            "../secret.pdf"
+        )
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "不正なパス",
+        ):
+            validate_jpx_monthly_pdf_url(
+                invalid_url
+            )
+
+    def test_encoded_path_traversal_is_rejected(
+        self,
+    ) -> None:
+        invalid_url = (
+            "https://www.jpx.co.jp/"
+            "markets/statistics-equities/monthly/"
+            "%2e%2e/secret.pdf"
+        )
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "不正なパス",
+        ):
+            validate_jpx_monthly_pdf_url(
+                invalid_url
+            )
+
+    def test_pdf_is_downloaded_in_streaming_mode(
+        self,
+    ) -> None:
+        response = self.create_response(
+            chunks=[
+                b"%PDF-",
+                b"streamed",
+            ]
+        )
+
+        with requests.Session() as session:
+            with patch.object(
+                session,
+                "get",
+                return_value=response,
+            ) as get_mock:
+                content = download_monthly_pdf(
+                    session,
+                    self.VALID_URL,
+                )
+
+        self.assertEqual(
+            content,
+            b"%PDF-streamed",
+        )
+        get_mock.assert_called_once()
+        self.assertTrue(
+            get_mock.call_args.kwargs["stream"]
+        )
+        response.close.assert_called_once()
+
+    def test_redirect_to_other_host_is_rejected(
+        self,
+    ) -> None:
+        response = self.create_response(
+            url=(
+                "https://example.com/"
+                "17_kenri2607.pdf"
+            )
+        )
+
+        with requests.Session() as session:
+            with patch.object(
+                session,
+                "get",
+                return_value=response,
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "ホスト",
+                ):
+                    download_monthly_pdf(
+                        session,
+                        self.VALID_URL,
+                    )
+
+        response.close.assert_called_once()
+
+    def test_declared_oversized_pdf_is_rejected(
+        self,
+    ) -> None:
+        response = self.create_response(
+            headers={
+                "Content-Length": str(
+                    25 * 1024 * 1024 + 1
+                )
+            }
+        )
+
+        with requests.Session() as session:
+            with patch.object(
+                session,
+                "get",
+                return_value=response,
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "Content-Lengthが上限",
+                ):
+                    download_monthly_pdf(
+                        session,
+                        self.VALID_URL,
+                    )
+
+        response.iter_content.assert_not_called()
+        response.close.assert_called_once()
+
+    def test_actual_oversized_pdf_is_rejected(
+        self,
+    ) -> None:
+        response = self.create_response(
+            chunks=[
+                b"%PDF-",
+                b"1234567890",
+            ]
+        )
+
+        with requests.Session() as session:
+            with patch.object(
+                session,
+                "get",
+                return_value=response,
+            ):
+                with patch(
+                    "update_jpx_corporate_actions."
+                    "MAX_PDF_CONTENT_BYTES",
+                    8,
+                ):
+                    with self.assertRaisesRegex(
+                        RuntimeError,
+                        "実データサイズが上限",
+                    ):
+                        download_monthly_pdf(
+                            session,
+                            self.VALID_URL,
+                        )
+
+        response.close.assert_called_once()
+
+    def test_non_pdf_response_is_rejected(
+        self,
+    ) -> None:
+        response = self.create_response(
+            chunks=[
+                b"<html>",
+                b"error</html>",
+            ]
+        )
+
+        with requests.Session() as session:
+            with patch.object(
+                session,
+                "get",
+                return_value=response,
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "PDFではありません",
+                ):
+                    download_monthly_pdf(
+                        session,
+                        self.VALID_URL,
+                    )
+
+        response.close.assert_called_once()
+
+    def test_http_404_is_not_retried(
+        self,
+    ) -> None:
+        response = self.create_response(
+            status_code=404
+        )
+
+        with requests.Session() as session:
+            with patch.object(
+                session,
+                "get",
+                return_value=response,
+            ) as get_mock:
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "取得に失敗",
+                ):
+                    download_monthly_pdf(
+                        session,
+                        self.VALID_URL,
+                    )
+
+        self.assertEqual(
+            get_mock.call_count,
+            1,
+        )
+        response.close.assert_called_once()
+
+    def test_http_500_is_retried_then_succeeds(
+        self,
+    ) -> None:
+        failed_response = self.create_response(
+            status_code=500
+        )
+        successful_response = self.create_response(
+            chunks=[b"%PDF-success"]
+        )
+
+        with requests.Session() as session:
+            with patch.object(
+                session,
+                "get",
+                side_effect=[
+                    failed_response,
+                    successful_response,
+                ],
+            ) as get_mock:
+                with patch(
+                    "update_jpx_corporate_actions."
+                    "time.sleep"
+                ) as sleep_mock:
+                    content = download_monthly_pdf(
+                        session,
+                        self.VALID_URL,
+                    )
+
+        self.assertEqual(
+            content,
+            b"%PDF-success",
+        )
+        self.assertEqual(
+            get_mock.call_count,
+            2,
+        )
+        sleep_mock.assert_called_once()
+        failed_response.close.assert_called_once()
+        successful_response.close.assert_called_once()
+
+    def test_invalid_session_is_rejected(
+        self,
+    ) -> None:
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "requests.Session",
+        ):
+            download_monthly_pdf(
+                MagicMock(),
+                self.VALID_URL,
+            )
 
 # ============================================================
 # エントリーポイント
