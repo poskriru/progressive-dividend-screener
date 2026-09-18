@@ -9,7 +9,6 @@ screener.corporate_actionsで使用する調整係数へ変換する。
 
 from __future__ import annotations
 
-
 # ============================================================
 # 標準ライブラリ
 # ============================================================
@@ -22,7 +21,7 @@ from datetime import date, datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from io import BytesIO
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 # ============================================================
 # 外部ライブラリ
@@ -30,6 +29,7 @@ from urllib.parse import urlparse
 
 import pdfplumber
 import requests
+from bs4 import BeautifulSoup
 
 # ============================================================
 # 定数
@@ -90,6 +90,24 @@ HTTP_USER_AGENT = (
     "jpx-corporate-actions"
 )
 
+JPX_MONTHLY_INDEX_URL = (
+    "https://www.jpx.co.jp/"
+    "markets/statistics-equities/monthly/index.html"
+)
+
+JPX_MONTHLY_PAGE_PATH_PATTERN = re.compile(
+    r"^/markets/statistics-equities/monthly/"
+    r"(?:index|00-archives-[0-9]{2})\.html$"
+)
+
+JPX_MONTHLY_PDF_FILENAME_PATTERN = re.compile(
+    r"^(?:17|18)_kenri"
+    r"(?P<year>[0-9]{2})"
+    r"(?P<month>0[1-9]|1[0-2])"
+    r"\.pdf$",
+    re.IGNORECASE,
+)
+
 # ============================================================
 # データ型
 # ============================================================
@@ -114,6 +132,14 @@ class ParsedJpxPdf:
     table_count: int
     row_count: int
     actions: tuple[JpxCorporateAction, ...]
+
+
+@dataclass(frozen=True)
+class JpxMonthlyPdfSource:
+    """JPX統計月報ページから取得した月次PDF情報。"""
+
+    coverage_month: date
+    source_url: str
 
 # ============================================================
 # 共通変換
@@ -907,3 +933,192 @@ def download_monthly_pdf(
         f"エラー種別={type(last_error).__name__}, "
         f"エラー={last_error}"
     ) from last_error
+
+# ============================================================
+# JPX統計月報ページの解析
+# ============================================================
+
+def validate_jpx_monthly_page_url(value: Any) -> str:
+    """JPX統計月報またはバックナンバーページのURLを検証する。"""
+
+    if not isinstance(value, str):
+        raise RuntimeError(
+            "JPX統計月報ページのURLがstrではありません。"
+        )
+
+    page_url = value.strip()
+
+    if not page_url:
+        raise RuntimeError(
+            "JPX統計月報ページのURLが空です。"
+        )
+
+    if any(character.isspace() for character in page_url):
+        raise RuntimeError(
+            "JPX統計月報ページのURLに空白文字があります。"
+        )
+
+    parsed = urlparse(page_url)
+
+    if parsed.scheme != "https":
+        raise RuntimeError(
+            "JPX統計月報ページのURLはHTTPSである必要があります。"
+        )
+
+    if parsed.hostname != JPX_ALLOWED_HOST:
+        raise RuntimeError(
+            "JPX統計月報ページのホストが許可されていません。"
+        )
+
+    if parsed.username is not None or parsed.password is not None:
+        raise RuntimeError(
+            "JPX統計月報ページのURLに認証情報を指定できません。"
+        )
+
+    try:
+        port = parsed.port
+    except ValueError as error:
+        raise RuntimeError(
+            "JPX統計月報ページのポート番号が不正です。"
+        ) from error
+
+    if port not in (None, 443):
+        raise RuntimeError(
+            "JPX統計月報ページのポート番号が許可されていません。"
+        )
+
+    normalized_path = parsed.path.lower()
+
+    if ".." in normalized_path or "%2e" in normalized_path:
+        raise RuntimeError(
+            "JPX統計月報ページのパスが不正です。"
+        )
+
+    if JPX_MONTHLY_PAGE_PATH_PATTERN.fullmatch(
+        normalized_path
+    ) is None:
+        raise RuntimeError(
+            "JPX統計月報ページのパスが許可されていません。"
+        )
+
+    if parsed.query or parsed.fragment:
+        raise RuntimeError(
+            "JPX統計月報ページのURLにクエリまたは"
+            "フラグメントを指定できません。"
+        )
+
+    return page_url
+
+
+def extract_month_from_pdf_url(
+    source_url: str,
+) -> date | None:
+    """月次PDFのファイル名から対象年月を取得する。"""
+
+    parsed = urlparse(source_url)
+    filename = parsed.path.rsplit("/", 1)[-1]
+
+    match = JPX_MONTHLY_PDF_FILENAME_PATTERN.fullmatch(
+        filename
+    )
+
+    if match is None:
+        return None
+
+    year = 2000 + int(match.group("year"))
+    month = int(match.group("month"))
+
+    return date(year, month, 1)
+
+
+def parse_monthly_pdf_sources(
+    html: str,
+    *,
+    page_url: str,
+) -> tuple[JpxMonthlyPdfSource, ...]:
+    """JPX統計月報ページから企業行動PDFのURLを抽出する。"""
+
+    validated_page_url = validate_jpx_monthly_page_url(
+        page_url
+    )
+
+    if not isinstance(html, str):
+        raise RuntimeError(
+            "JPX統計月報ページの内容がstrではありません。"
+        )
+
+    if not html.strip():
+        raise RuntimeError(
+            "JPX統計月報ページの内容が空です。"
+        )
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    sources_by_month: dict[
+        date,
+        JpxMonthlyPdfSource,
+    ] = {}
+
+    for anchor in soup.find_all("a", href=True):
+        href = anchor.get("href")
+
+        if not isinstance(href, str):
+            continue
+
+        href = href.strip()
+
+        if not href:
+            continue
+
+        source_url = urljoin(
+            validated_page_url,
+            href,
+        )
+
+        coverage_month = extract_month_from_pdf_url(
+            source_url
+        )
+
+        if coverage_month is None:
+            continue
+
+        validated_source_url = (
+            validate_jpx_monthly_pdf_url(source_url)
+        )
+
+        source = JpxMonthlyPdfSource(
+            coverage_month=coverage_month,
+            source_url=validated_source_url,
+        )
+
+        existing = sources_by_month.get(coverage_month)
+
+        if existing is not None:
+            if existing.source_url != source.source_url:
+                raise RuntimeError(
+                    "JPX統計月報ページに同一対象年月の"
+                    "異なるPDFがあります。"
+                    f" month={coverage_month:%Y-%m},"
+                    f" first={existing.source_url},"
+                    f" second={source.source_url}"
+                )
+
+            continue
+
+        sources_by_month[coverage_month] = source
+
+    if not sources_by_month:
+        raise RuntimeError(
+            "JPX統計月報ページから"
+            "新株落・権利落等一覧PDFを取得できませんでした。"
+        )
+
+    return tuple(
+        sorted(
+            sources_by_month.values(),
+            key=lambda source: (
+                source.coverage_month,
+                source.source_url,
+            ),
+        )
+    )
