@@ -2,7 +2,7 @@
 PostgreSQLの累進配当指標から投資条件に合う銘柄を抽出し、
 Google Sheetsの「累進配当候補」シートへランキング出力する。
 
-抽出条件は環境変数で変更できる。判定元の年間配当は
+抽出条件はGoogle Sheetsまたは環境変数で変更できる。判定元の年間配当は
 株式分割・株式併合による過年度調整前の値である。
 """
 
@@ -52,6 +52,37 @@ from update_edinet_financials import (
 
 CANDIDATE_SHEET_NAME = "累進配当候補"
 CANDIDATE_HISTORY_SHEET_NAME = "累進配当候補_変動履歴"
+CANDIDATE_CRITERIA_SHEET_NAME = "累進配当条件"
+
+CANDIDATE_CRITERIA_HEADERS = [
+    "設定項目",
+    "設定値",
+    "説明",
+]
+
+CANDIDATE_CRITERIA_DESCRIPTIONS = {
+    "CANDIDATE_MIN_DIVIDEND_YIELD_PERCENT": (
+        "配当利回りの下限（%）。0以上。"
+    ),
+    "CANDIDATE_MAX_PAYOUT_RATIO_PERCENT": (
+        "配当性向の上限（%）。0より大きい値。"
+    ),
+    "CANDIDATE_MAX_PER_RATIO": (
+        "PERの上限（倍）。0より大きい値。"
+    ),
+    "CANDIDATE_MAX_PBR_RATIO": (
+        "PBRの上限（倍）。0より大きい値。"
+    ),
+    "CANDIDATE_MIN_ROE_PERCENT": (
+        "ROEの下限（%）。"
+    ),
+    "CANDIDATE_REQUIRE_POSITIVE_FREE_CASH_FLOW": (
+        "フリーCFをプラス必須にするか。trueまたはfalse。"
+    ),
+    "CANDIDATE_MAX_ROWS": (
+        "候補シートの最大出力件数。1〜5000の整数。"
+    ),
+}
 
 CANDIDATE_HISTORY_HEADERS = [
     "イベントID",
@@ -162,6 +193,90 @@ class CandidateCriteria:
             ),
         )
 
+    @classmethod
+    def from_settings(
+        cls,
+        settings: dict[str, str],
+    ) -> "CandidateCriteria":
+        """条件シートの設定値を検証して抽出条件へ変換する。"""
+
+        return cls(
+            min_dividend_yield_percent=parse_decimal_setting(
+                "CANDIDATE_MIN_DIVIDEND_YIELD_PERCENT",
+                settings[
+                    "CANDIDATE_MIN_DIVIDEND_YIELD_PERCENT"
+                ],
+                minimum=Decimal("0"),
+            ),
+            max_payout_ratio_percent=parse_decimal_setting(
+                "CANDIDATE_MAX_PAYOUT_RATIO_PERCENT",
+                settings[
+                    "CANDIDATE_MAX_PAYOUT_RATIO_PERCENT"
+                ],
+                minimum=Decimal("0"),
+                minimum_inclusive=False,
+            ),
+            max_per_ratio=parse_decimal_setting(
+                "CANDIDATE_MAX_PER_RATIO",
+                settings["CANDIDATE_MAX_PER_RATIO"],
+                minimum=Decimal("0"),
+                minimum_inclusive=False,
+            ),
+            max_pbr_ratio=parse_decimal_setting(
+                "CANDIDATE_MAX_PBR_RATIO",
+                settings["CANDIDATE_MAX_PBR_RATIO"],
+                minimum=Decimal("0"),
+                minimum_inclusive=False,
+            ),
+            min_roe_percent=parse_decimal_setting(
+                "CANDIDATE_MIN_ROE_PERCENT",
+                settings["CANDIDATE_MIN_ROE_PERCENT"],
+            ),
+            require_positive_free_cash_flow=(
+                parse_boolean_setting(
+                    "CANDIDATE_REQUIRE_POSITIVE_FREE_CASH_FLOW",
+                    settings[
+                        "CANDIDATE_REQUIRE_POSITIVE_FREE_CASH_FLOW"
+                    ],
+                )
+            ),
+            max_candidates=parse_integer_setting(
+                "CANDIDATE_MAX_ROWS",
+                settings["CANDIDATE_MAX_ROWS"],
+                minimum=1,
+                maximum=5000,
+            ),
+        )
+
+    def to_settings(self) -> dict[str, str]:
+        """条件シートへ保存できる文字列設定へ変換する。"""
+
+        return {
+            "CANDIDATE_MIN_DIVIDEND_YIELD_PERCENT": str(
+                self.min_dividend_yield_percent
+            ),
+            "CANDIDATE_MAX_PAYOUT_RATIO_PERCENT": str(
+                self.max_payout_ratio_percent
+            ),
+            "CANDIDATE_MAX_PER_RATIO": str(
+                self.max_per_ratio
+            ),
+            "CANDIDATE_MAX_PBR_RATIO": str(
+                self.max_pbr_ratio
+            ),
+            "CANDIDATE_MIN_ROE_PERCENT": str(
+                self.min_roe_percent
+            ),
+            "CANDIDATE_REQUIRE_POSITIVE_FREE_CASH_FLOW": (
+                "true"
+                if self.require_positive_free_cash_flow
+                else "false"
+            ),
+            "CANDIDATE_MAX_ROWS": str(
+                self.max_candidates
+            ),
+        }
+
     def describe(self) -> str:
         """ログ表示用の抽出条件を返す。"""
 
@@ -200,6 +315,95 @@ class CandidateChanges:
             self.added_candidates
             or self.removed_candidates
         )
+
+
+def parse_decimal_setting(
+    name: str,
+    raw_value: Any,
+    *,
+    minimum: Decimal | None = None,
+    minimum_inclusive: bool = True,
+) -> Decimal:
+    """条件シートの有限なDecimal設定を検証する。"""
+
+    value_text = str(raw_value).strip()
+
+    try:
+        value = Decimal(value_text)
+    except (InvalidOperation, ValueError) as error:
+        raise RuntimeError(
+            f"条件{name}は数値で指定してください。"
+            f"指定値: {value_text}"
+        ) from error
+
+    if not value.is_finite():
+        raise RuntimeError(
+            f"条件{name}には有限値を指定してください。"
+            f"指定値: {value_text}"
+        )
+
+    if minimum is not None:
+        below_minimum = value < minimum
+        equal_to_exclusive_minimum = (
+            not minimum_inclusive and value == minimum
+        )
+
+        if below_minimum or equal_to_exclusive_minimum:
+            operator = ">=" if minimum_inclusive else ">"
+            raise RuntimeError(
+                f"条件{name}は{operator}{minimum}で指定してください。"
+                f"指定値: {value_text}"
+            )
+
+    return value
+
+
+def parse_boolean_setting(
+    name: str,
+    raw_value: Any,
+) -> bool:
+    """条件シートのboolean設定を検証する。"""
+
+    value_text = str(raw_value).strip().lower()
+
+    if value_text in {"1", "true", "yes", "on", "はい"}:
+        return True
+
+    if value_text in {"0", "false", "no", "off", "いいえ"}:
+        return False
+
+    raise RuntimeError(
+        f"条件{name}はtrueまたはfalseで指定してください。"
+        f"指定値: {raw_value}"
+    )
+
+
+def parse_integer_setting(
+    name: str,
+    raw_value: Any,
+    *,
+    minimum: int,
+    maximum: int,
+) -> int:
+    """条件シートの範囲制限付き整数を検証する。"""
+
+    value_text = str(raw_value).strip()
+
+    try:
+        value = int(value_text)
+    except ValueError as error:
+        raise RuntimeError(
+            f"条件{name}は整数で指定してください。"
+            f"指定値: {value_text}"
+        ) from error
+
+    if not minimum <= value <= maximum:
+        raise RuntimeError(
+            f"条件{name}は{minimum}〜{maximum}で指定してください。"
+            f"指定値: {value_text}"
+        )
+
+    return value
 
 
 def get_decimal_environment(
@@ -288,6 +492,157 @@ def get_integer_environment(
         )
 
     return value
+
+
+# ============================================================
+# Google Sheetsから抽出条件を取得
+# ============================================================
+
+def build_candidate_criteria_rows(
+    criteria: CandidateCriteria,
+) -> list[list[str]]:
+    """抽出条件を条件シートの行へ変換する。"""
+
+    settings = criteria.to_settings()
+
+    return [
+        [
+            name,
+            settings[name],
+            description,
+        ]
+        for name, description
+        in CANDIDATE_CRITERIA_DESCRIPTIONS.items()
+    ]
+
+
+def load_candidate_criteria_from_sheet(
+    sheets_service,
+    spreadsheet_id: str,
+) -> CandidateCriteria:
+    """条件シートを作成または読込し、検証済み条件を返す。"""
+
+    metadata = get_spreadsheet_metadata(
+        sheets_service,
+        spreadsheet_id,
+    )
+    sheet_exists = any(
+        sheet.get("properties", {}).get("title")
+        == CANDIDATE_CRITERIA_SHEET_NAME
+        for sheet in metadata.get("sheets", [])
+    )
+
+    if not sheet_exists:
+        environment_criteria = (
+            CandidateCriteria.from_environment()
+        )
+        write_sheet(
+            sheets_service,
+            spreadsheet_id,
+            CANDIDATE_CRITERIA_SHEET_NAME,
+            CANDIDATE_CRITERIA_HEADERS,
+            build_candidate_criteria_rows(
+                environment_criteria
+            ),
+        )
+        print(
+            "累進配当条件シートを初期値で作成しました。"
+        )
+        return environment_criteria
+
+    values = read_sheet(
+        sheets_service,
+        spreadsheet_id,
+        CANDIDATE_CRITERIA_SHEET_NAME,
+    )
+
+    if not values:
+        environment_criteria = (
+            CandidateCriteria.from_environment()
+        )
+        write_sheet(
+            sheets_service,
+            spreadsheet_id,
+            CANDIDATE_CRITERIA_SHEET_NAME,
+            CANDIDATE_CRITERIA_HEADERS,
+            build_candidate_criteria_rows(
+                environment_criteria
+            ),
+        )
+        print(
+            "空の累進配当条件シートを初期値で更新しました。"
+        )
+        return environment_criteria
+
+    headers = [
+        str(value).strip()
+        for value in values[0]
+    ]
+
+    if headers != CANDIDATE_CRITERIA_HEADERS:
+        raise RuntimeError(
+            "累進配当条件シートの列が一致しません。"
+            f"期待列: {CANDIDATE_CRITERIA_HEADERS}, "
+            f"実際の列: {headers}"
+        )
+
+    settings: dict[str, str] = {}
+    allowed_names = set(
+        CANDIDATE_CRITERIA_DESCRIPTIONS
+    )
+
+    for row_number, row in enumerate(
+        values[1:],
+        start=2,
+    ):
+        if not row or not str(row[0]).strip():
+            continue
+
+        name = str(row[0]).strip()
+
+        if name not in allowed_names:
+            raise RuntimeError(
+                "累進配当条件シートに不明な設定があります。"
+                f"行: {row_number}, 設定項目: {name}"
+            )
+
+        if name in settings:
+            raise RuntimeError(
+                "累進配当条件シートに設定の重複があります。"
+                f"行: {row_number}, 設定項目: {name}"
+            )
+
+        value = (
+            str(row[1]).strip()
+            if len(row) > 1
+            else ""
+        )
+
+        if not value:
+            raise RuntimeError(
+                "累進配当条件シートの設定値が空です。"
+                f"行: {row_number}, 設定項目: {name}"
+            )
+
+        settings[name] = value
+
+    missing_names = allowed_names - set(settings)
+
+    if missing_names:
+        raise RuntimeError(
+            "累進配当条件シートに必要な設定がありません。"
+            f"不足設定: {sorted(missing_names)}"
+        )
+
+    criteria = CandidateCriteria.from_settings(
+        settings
+    )
+
+    print(
+        "累進配当条件シートから抽出条件を読み込みました。"
+    )
+
+    return criteria
 
 
 # ============================================================
@@ -1179,14 +1534,16 @@ def main() -> None:
     service_account_json = get_required_environment_variable(
         "GOOGLE_SERVICE_ACCOUNT_JSON"
     )
-    criteria = CandidateCriteria.from_environment()
-
-    print(f"累進配当候補の抽出条件: {criteria.describe()}")
-    print(f"判定上の注意: {RAW_DIVIDEND_CAUTION}")
-
     sheets_service = create_google_sheets_service(
         service_account_json
     )
+    criteria = load_candidate_criteria_from_sheet(
+        sheets_service,
+        spreadsheet_id,
+    )
+
+    print(f"累進配当候補の抽出条件: {criteria.describe()}")
+    print(f"判定上の注意: {RAW_DIVIDEND_CAUTION}")
     (
         previous_snapshot,
         previous_sheet_exists,
