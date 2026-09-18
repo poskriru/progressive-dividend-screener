@@ -26,8 +26,12 @@ from update_jpx_corporate_actions import (  # noqa: E402
     MAX_HTML_CONTENT_BYTES,
     JpxCorporateAction,
     JpxMonthlyPdfSource,
+    ParsedJpxCoverage,
+    ParsedJpxMonthlySource,
+    ParsedJpxPdf,
     build_month_range,
     discover_monthly_pdf_sources,
+    download_and_parse_monthly_sources,
     download_monthly_page,
     download_monthly_pdf,
     extract_month_from_pdf_url,
@@ -2736,6 +2740,616 @@ class JpxMonthlyCoverageSelectionTest(unittest.TestCase):
                 ),
                 coverage_start=date(2024, 1, 1),
                 coverage_end=date(2024, 1, 1),
+            )
+
+# ============================================================
+# JPX月次PDF一括解析テスト
+# ============================================================
+
+class JpxMonthlyBatchParsingTest(unittest.TestCase):
+    """選択したJPX月次PDFの取得・解析・統合を検証する。"""
+
+    @staticmethod
+    def create_source(
+        year: int,
+        month: int,
+        *,
+        directory: str = "example-att",
+    ) -> JpxMonthlyPdfSource:
+        """指定年月のPDF情報を作成する。"""
+
+        return JpxMonthlyPdfSource(
+            coverage_month=date(
+                year,
+                month,
+                1,
+            ),
+            source_url=(
+                "https://www.jpx.co.jp/"
+                "markets/statistics-equities/monthly/"
+                f"{directory}/"
+                f"17_kenri{year % 100:02d}"
+                f"{month:02d}.pdf"
+            ),
+        )
+
+    @staticmethod
+    def create_action(
+        *,
+        security_code: str,
+        effective_date: date,
+        adjustment_factor: str = "0.5000000000",
+        ex_right_type: str = "1",
+    ) -> JpxCorporateAction:
+        """テスト用企業行動を作成する。"""
+
+        return JpxCorporateAction(
+            security_code=security_code,
+            effective_date=effective_date,
+            adjustment_factor=Decimal(
+                adjustment_factor
+            ),
+            ex_right_type=ex_right_type,
+            description=(
+                f"{security_code} "
+                f"{effective_date} 株式分割"
+            ),
+        )
+
+    @staticmethod
+    def create_parsed_pdf(
+        content: bytes,
+        *,
+        actions: tuple[
+            JpxCorporateAction,
+            ...,
+        ] = (),
+        content_sha256: str | None = None,
+    ) -> ParsedJpxPdf:
+        """テスト用PDF解析結果を作成する。"""
+
+        return ParsedJpxPdf(
+            content_sha256=(
+                content_sha256
+                if content_sha256 is not None
+                else hashlib.sha256(
+                    content
+                ).hexdigest()
+            ),
+            page_count=2,
+            table_count=3,
+            row_count=10,
+            actions=actions,
+        )
+
+    def test_sources_are_downloaded_and_parsed_in_month_order(
+        self,
+    ) -> None:
+        january_source = self.create_source(
+            2024,
+            1,
+            directory="january-att",
+        )
+        february_source = self.create_source(
+            2024,
+            2,
+            directory="february-att",
+        )
+
+        january_content = b"%PDF-january"
+        february_content = b"%PDF-february"
+
+        january_action = self.create_action(
+            security_code="2222",
+            effective_date=date(
+                2024,
+                1,
+                30,
+            ),
+        )
+        february_action = self.create_action(
+            security_code="1111",
+            effective_date=date(
+                2024,
+                2,
+                28,
+            ),
+            adjustment_factor="10.0000000000",
+            ex_right_type="2",
+        )
+
+        contents_by_url = {
+            january_source.source_url: (
+                january_content
+            ),
+            february_source.source_url: (
+                february_content
+            ),
+        }
+        parsed_by_content = {
+            january_content: self.create_parsed_pdf(
+                january_content,
+                actions=(
+                    january_action,
+                ),
+            ),
+            february_content: self.create_parsed_pdf(
+                february_content,
+                actions=(
+                    february_action,
+                ),
+            ),
+        }
+
+        def fake_download(
+            session: requests.Session,
+            source_url: str,
+        ) -> bytes:
+            del session
+            return contents_by_url[source_url]
+
+        def fake_parse(
+            content: bytes,
+        ) -> ParsedJpxPdf:
+            return parsed_by_content[content]
+
+        session = requests.Session()
+
+        with (
+            patch(
+                "update_jpx_corporate_actions."
+                "download_monthly_pdf",
+                side_effect=fake_download,
+            ) as download_mock,
+            patch(
+                "update_jpx_corporate_actions."
+                "parse_monthly_pdf",
+                side_effect=fake_parse,
+            ) as parse_mock,
+        ):
+            result = (
+                download_and_parse_monthly_sources(
+                    session,
+                    (
+                        february_source,
+                        january_source,
+                    ),
+                )
+            )
+
+        self.assertIsInstance(
+            result,
+            ParsedJpxCoverage,
+        )
+        self.assertEqual(
+            result.coverage_start,
+            date(2024, 1, 1),
+        )
+        self.assertEqual(
+            result.coverage_end,
+            date(2024, 2, 1),
+        )
+        self.assertEqual(
+            result.actions,
+            (
+                january_action,
+                february_action,
+            ),
+        )
+        self.assertEqual(
+            tuple(
+                parsed_source.source
+                for parsed_source
+                in result.source_files
+            ),
+            (
+                january_source,
+                february_source,
+            ),
+        )
+        self.assertEqual(
+            result.source_files[0],
+            ParsedJpxMonthlySource(
+                source=january_source,
+                content_sha256=hashlib.sha256(
+                    january_content
+                ).hexdigest(),
+                page_count=2,
+                table_count=3,
+                row_count=10,
+                actions=(
+                    january_action,
+                ),
+            ),
+        )
+        self.assertEqual(
+            download_mock.call_count,
+            2,
+        )
+        self.assertEqual(
+            parse_mock.call_count,
+            2,
+        )
+
+    def test_duplicate_same_source_is_processed_once(
+        self,
+    ) -> None:
+        source = self.create_source(
+            2024,
+            1,
+        )
+        content = b"%PDF-january"
+        parsed = self.create_parsed_pdf(
+            content
+        )
+        session = requests.Session()
+
+        with (
+            patch(
+                "update_jpx_corporate_actions."
+                "download_monthly_pdf",
+                return_value=content,
+            ) as download_mock,
+            patch(
+                "update_jpx_corporate_actions."
+                "parse_monthly_pdf",
+                return_value=parsed,
+            ) as parse_mock,
+        ):
+            result = (
+                download_and_parse_monthly_sources(
+                    session,
+                    (
+                        source,
+                        source,
+                    ),
+                )
+            )
+
+        self.assertEqual(
+            len(result.source_files),
+            1,
+        )
+        download_mock.assert_called_once()
+        parse_mock.assert_called_once()
+
+    def test_missing_month_is_rejected_before_download(
+        self,
+    ) -> None:
+        january = self.create_source(
+            2024,
+            1,
+        )
+        march = self.create_source(
+            2024,
+            3,
+        )
+        session = requests.Session()
+
+        with patch(
+            "update_jpx_corporate_actions."
+            "download_monthly_pdf",
+        ) as download_mock:
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "2024-02",
+            ):
+                download_and_parse_monthly_sources(
+                    session,
+                    (
+                        january,
+                        march,
+                    ),
+                )
+
+        download_mock.assert_not_called()
+
+    def test_filename_month_mismatch_is_rejected(
+        self,
+    ) -> None:
+        source = JpxMonthlyPdfSource(
+            coverage_month=date(
+                2024,
+                1,
+                1,
+            ),
+            source_url=(
+                "https://www.jpx.co.jp/"
+                "markets/statistics-equities/monthly/"
+                "example-att/17_kenri2402.pdf"
+            ),
+        )
+        session = requests.Session()
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "一致しません",
+        ):
+            download_and_parse_monthly_sources(
+                session,
+                (
+                    source,
+                ),
+            )
+
+    def test_unrecognized_pdf_filename_is_rejected(
+        self,
+    ) -> None:
+        source = JpxMonthlyPdfSource(
+            coverage_month=date(
+                2024,
+                1,
+                1,
+            ),
+            source_url=(
+                "https://www.jpx.co.jp/"
+                "markets/statistics-equities/monthly/"
+                "example-att/monthly.pdf"
+            ),
+        )
+        session = requests.Session()
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "ファイル名",
+        ):
+            download_and_parse_monthly_sources(
+                session,
+                (
+                    source,
+                ),
+            )
+
+    def test_sha256_mismatch_is_rejected(
+        self,
+    ) -> None:
+        source = self.create_source(
+            2024,
+            1,
+        )
+        content = b"%PDF-january"
+        parsed = self.create_parsed_pdf(
+            content,
+            content_sha256="0" * 64,
+        )
+        session = requests.Session()
+
+        with (
+            patch(
+                "update_jpx_corporate_actions."
+                "download_monthly_pdf",
+                return_value=content,
+            ),
+            patch(
+                "update_jpx_corporate_actions."
+                "parse_monthly_pdf",
+                return_value=parsed,
+            ),
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "SHA-256",
+            ):
+                download_and_parse_monthly_sources(
+                    session,
+                    (
+                        source,
+                    ),
+                )
+
+    def test_action_outside_pdf_month_is_rejected(
+        self,
+    ) -> None:
+        source = self.create_source(
+            2024,
+            1,
+        )
+        content = b"%PDF-january"
+        outside_action = self.create_action(
+            security_code="1111",
+            effective_date=date(
+                2024,
+                2,
+                1,
+            ),
+        )
+        parsed = self.create_parsed_pdf(
+            content,
+            actions=(
+                outside_action,
+            ),
+        )
+        session = requests.Session()
+
+        with (
+            patch(
+                "update_jpx_corporate_actions."
+                "download_monthly_pdf",
+                return_value=content,
+            ),
+            patch(
+                "update_jpx_corporate_actions."
+                "parse_monthly_pdf",
+                return_value=parsed,
+            ),
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "対象年月外",
+            ):
+                download_and_parse_monthly_sources(
+                    session,
+                    (
+                        source,
+                    ),
+                )
+
+    def test_duplicate_identical_action_is_merged(
+        self,
+    ) -> None:
+        source = self.create_source(
+            2024,
+            1,
+        )
+        content = b"%PDF-january"
+        action = self.create_action(
+            security_code="1111",
+            effective_date=date(
+                2024,
+                1,
+                30,
+            ),
+        )
+        parsed = self.create_parsed_pdf(
+            content,
+            actions=(
+                action,
+                action,
+            ),
+        )
+        session = requests.Session()
+
+        with (
+            patch(
+                "update_jpx_corporate_actions."
+                "download_monthly_pdf",
+                return_value=content,
+            ),
+            patch(
+                "update_jpx_corporate_actions."
+                "parse_monthly_pdf",
+                return_value=parsed,
+            ),
+        ):
+            result = (
+                download_and_parse_monthly_sources(
+                    session,
+                    (
+                        source,
+                    ),
+                )
+            )
+
+        self.assertEqual(
+            result.actions,
+            (
+                action,
+            ),
+        )
+
+    def test_conflicting_actions_are_rejected(
+        self,
+    ) -> None:
+        source = self.create_source(
+            2024,
+            1,
+        )
+        content = b"%PDF-january"
+        first = self.create_action(
+            security_code="1111",
+            effective_date=date(
+                2024,
+                1,
+                30,
+            ),
+            adjustment_factor="0.5000000000",
+            ex_right_type="1",
+        )
+        second = self.create_action(
+            security_code="1111",
+            effective_date=date(
+                2024,
+                1,
+                30,
+            ),
+            adjustment_factor="10.0000000000",
+            ex_right_type="2",
+        )
+        parsed = self.create_parsed_pdf(
+            content,
+            actions=(
+                first,
+                second,
+            ),
+        )
+        session = requests.Session()
+
+        with (
+            patch(
+                "update_jpx_corporate_actions."
+                "download_monthly_pdf",
+                return_value=content,
+            ),
+            patch(
+                "update_jpx_corporate_actions."
+                "parse_monthly_pdf",
+                return_value=parsed,
+            ),
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "矛盾",
+            ):
+                download_and_parse_monthly_sources(
+                    session,
+                    (
+                        source,
+                    ),
+                )
+
+    def test_empty_sources_are_rejected(
+        self,
+    ) -> None:
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "空",
+        ):
+            download_and_parse_monthly_sources(
+                requests.Session(),
+                (),
+            )
+
+    def test_invalid_sources_container_is_rejected(
+        self,
+    ) -> None:
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "tuple",
+        ):
+            download_and_parse_monthly_sources(
+                requests.Session(),
+                [],  # type: ignore[arg-type]
+            )
+
+    def test_invalid_source_type_is_rejected(
+        self,
+    ) -> None:
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "型",
+        ):
+            download_and_parse_monthly_sources(
+                requests.Session(),
+                (
+                    "invalid",  # type: ignore[arg-type]
+                ),
+            )
+
+    def test_invalid_session_is_rejected(
+        self,
+    ) -> None:
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "requests.Session",
+        ):
+            download_and_parse_monthly_sources(
+                MagicMock(),
+                (
+                    self.create_source(
+                        2024,
+                        1,
+                    ),
+                ),
             )
 
 # ============================================================
