@@ -38,6 +38,7 @@ from update_jpx_corporate_actions import (  # noqa: E402
     extract_ratio,
     find_effective_date_in_row,
     find_security_code_in_row,
+    get_month_end,
     merge_monthly_pdf_sources,
     next_month,
     normalize_month,
@@ -49,6 +50,8 @@ from update_jpx_corporate_actions import (  # noqa: E402
     parse_monthly_pdf,
     parse_monthly_pdf_sources,
     parse_pdf_table_row,
+    save_complete_jpx_coverage,
+    save_failed_monthly_source,
     select_monthly_pdf_sources,
     validate_html_content,
     validate_jpx_monthly_page_url,
@@ -3351,6 +3354,620 @@ class JpxMonthlyBatchParsingTest(unittest.TestCase):
                     ),
                 ),
             )
+
+# ============================================================
+# JPX DB保存処理テスト
+# ============================================================
+
+class JpxDatabasePersistenceTest(unittest.TestCase):
+    """JPX解析結果のDB保存処理を検証する。"""
+
+    SOURCE_URL = (
+        "https://www.jpx.co.jp/"
+        "markets/statistics-equities/monthly/"
+        "example-att/17_kenri2402.pdf"
+    )
+
+    @staticmethod
+    def create_database_mock(
+        *,
+        existing_security_codes: tuple[str, ...] = (),
+    ) -> tuple[
+        MagicMock,
+        MagicMock,
+        MagicMock,
+    ]:
+        """DB接続、トランザクション、カーソルを作成する。"""
+
+        connection = MagicMock()
+        connection.__enter__.return_value = connection
+
+        transaction = MagicMock()
+        connection.transaction.return_value = (
+            transaction
+        )
+        transaction.__enter__.return_value = (
+            transaction
+        )
+
+        cursor_context = MagicMock()
+        cursor = MagicMock()
+        connection.cursor.return_value = (
+            cursor_context
+        )
+        cursor_context.__enter__.return_value = (
+            cursor
+        )
+        cursor.fetchall.return_value = [
+            {
+                "security_code": security_code,
+            }
+            for security_code
+            in existing_security_codes
+        ]
+
+        return connection, transaction, cursor
+
+    @classmethod
+    def create_result(
+        cls,
+        *,
+        content_sha256: str = "a" * 64,
+        include_action: bool = True,
+    ) -> ParsedJpxCoverage:
+        """1か月分の解析結果を作成する。"""
+
+        source = JpxMonthlyPdfSource(
+            coverage_month=date(
+                2024,
+                2,
+                1,
+            ),
+            source_url=cls.SOURCE_URL,
+        )
+
+        action = JpxCorporateAction(
+            security_code="1111",
+            effective_date=date(
+                2024,
+                2,
+                28,
+            ),
+            adjustment_factor=Decimal(
+                "0.5000000000"
+            ),
+            ex_right_type="1",
+            description="1:2 株式分割",
+        )
+
+        actions = (
+            (action,)
+            if include_action
+            else ()
+        )
+
+        parsed_source = ParsedJpxMonthlySource(
+            source=source,
+            content_sha256=content_sha256,
+            page_count=2,
+            table_count=3,
+            row_count=10,
+            actions=actions,
+        )
+
+        return ParsedJpxCoverage(
+            coverage_start=date(
+                2024,
+                2,
+                1,
+            ),
+            coverage_end=date(
+                2024,
+                2,
+                1,
+            ),
+            source_files=(
+                parsed_source,
+            ),
+            actions=actions,
+        )
+
+    def test_month_end_handles_leap_year(
+        self,
+    ) -> None:
+        self.assertEqual(
+            get_month_end(
+                date(2024, 2, 15)
+            ),
+            date(2024, 2, 29),
+        )
+
+    def test_month_end_handles_december(
+        self,
+    ) -> None:
+        self.assertEqual(
+            get_month_end(
+                date(2024, 12, 1)
+            ),
+            date(2024, 12, 31),
+        )
+
+    def test_failed_source_is_upserted(
+        self,
+    ) -> None:
+        source = JpxMonthlyPdfSource(
+            coverage_month=date(
+                2024,
+                2,
+                1,
+            ),
+            source_url=self.SOURCE_URL,
+        )
+        connection, transaction, cursor = (
+            self.create_database_mock()
+        )
+
+        with patch(
+            "update_jpx_corporate_actions."
+            "create_database_connection",
+            return_value=connection,
+        ) as connection_mock:
+            save_failed_monthly_source(
+                source,
+                RuntimeError(
+                    "PDF解析失敗"
+                ),
+            )
+
+        connection_mock.assert_called_once_with(
+            "progressive-dividend-jpx-actions"
+        )
+        connection.transaction.assert_called_once()
+        cursor.execute.assert_called_once()
+
+        sql, parameters = (
+            cursor.execute.call_args.args
+        )
+
+        self.assertIn(
+            "jpx_corporate_action_source_files",
+            sql,
+        )
+        self.assertIn(
+            "ON CONFLICT (source_url)",
+            sql,
+        )
+        self.assertEqual(
+            parameters[0],
+            "monthly_pdf",
+        )
+        self.assertEqual(
+            parameters[1],
+            date(2024, 2, 1),
+        )
+        self.assertEqual(
+            parameters[2],
+            date(2024, 2, 29),
+        )
+        self.assertIsNone(
+            parameters[3]
+        )
+        self.assertEqual(
+            parameters[4],
+            self.SOURCE_URL,
+        )
+        self.assertIsNone(
+            parameters[5]
+        )
+        self.assertEqual(
+            parameters[6],
+            "failed",
+        )
+        self.assertEqual(
+            parameters[7],
+            0,
+        )
+        self.assertIn(
+            "RuntimeError: PDF解析失敗",
+            parameters[8],
+        )
+        transaction.__exit__.assert_called_once()
+
+    def test_complete_result_is_saved_transactionally(
+        self,
+    ) -> None:
+        result = self.create_result()
+        connection, transaction, cursor = (
+            self.create_database_mock(
+                existing_security_codes=(
+                    "1111",
+                )
+            )
+        )
+
+        with patch(
+            "update_jpx_corporate_actions."
+            "create_database_connection",
+            return_value=connection,
+        ):
+            save_complete_jpx_coverage(
+                result
+            )
+
+        connection.transaction.assert_called_once()
+        transaction.__exit__.assert_called_once()
+
+        self.assertEqual(
+            cursor.execute.call_count,
+            2,
+        )
+        self.assertEqual(
+            cursor.executemany.call_count,
+            2,
+        )
+
+        select_sql = (
+            cursor.execute.call_args_list[
+                0
+            ].args[0]
+        )
+        delete_sql, delete_parameters = (
+            cursor.execute.call_args_list[
+                1
+            ].args
+        )
+        source_sql, source_rows = (
+            cursor.executemany.call_args_list[
+                0
+            ].args
+        )
+        action_sql, action_rows = (
+            cursor.executemany.call_args_list[
+                1
+            ].args
+        )
+
+        self.assertIn(
+            "FROM screener.securities",
+            select_sql,
+        )
+        self.assertIn(
+            "jpx_corporate_action_source_files",
+            source_sql,
+        )
+        self.assertIn(
+            "ON CONFLICT (source_url)",
+            source_sql,
+        )
+        self.assertEqual(
+            len(source_rows),
+            1,
+        )
+        self.assertEqual(
+            source_rows[0][0],
+            "monthly_pdf",
+        )
+        self.assertEqual(
+            source_rows[0][1],
+            date(2024, 2, 1),
+        )
+        self.assertEqual(
+            source_rows[0][2],
+            date(2024, 2, 29),
+        )
+        self.assertIsNone(
+            source_rows[0][3]
+        )
+        self.assertEqual(
+            source_rows[0][6],
+            "complete",
+        )
+        self.assertEqual(
+            source_rows[0][7],
+            1,
+        )
+
+        self.assertIn(
+            "DELETE FROM",
+            delete_sql,
+        )
+        self.assertIn(
+            "screener.corporate_actions",
+            delete_sql,
+        )
+        self.assertEqual(
+            delete_parameters[:3],
+            (
+                "JPX",
+                date(2024, 2, 1),
+                date(2024, 2, 29),
+            ),
+        )
+
+        self.assertIn(
+            "INSERT INTO",
+            action_sql,
+        )
+        self.assertIn(
+            "screener.corporate_actions",
+            action_sql,
+        )
+        self.assertEqual(
+            len(action_rows),
+            1,
+        )
+        self.assertEqual(
+            action_rows[0][:6],
+            (
+                "1111",
+                date(2024, 2, 28),
+                Decimal("0.5000000000"),
+                "1",
+                "JPX",
+                self.SOURCE_URL,
+            ),
+        )
+
+    def test_empty_action_result_still_replaces_month(
+        self,
+    ) -> None:
+        result = self.create_result(
+            include_action=False
+        )
+        connection, transaction, cursor = (
+            self.create_database_mock()
+        )
+
+        with patch(
+            "update_jpx_corporate_actions."
+            "create_database_connection",
+            return_value=connection,
+        ):
+            save_complete_jpx_coverage(
+                result
+            )
+
+        connection.transaction.assert_called_once()
+        transaction.__exit__.assert_called_once()
+
+        self.assertEqual(
+            cursor.execute.call_count,
+            1,
+        )
+        self.assertEqual(
+            cursor.executemany.call_count,
+            1,
+        )
+
+        delete_sql = (
+            cursor.execute.call_args.args[0]
+        )
+        self.assertIn(
+            "DELETE FROM",
+            delete_sql,
+        )
+
+        source_sql = (
+            cursor.executemany.call_args.args[
+                0
+            ]
+        )
+        self.assertIn(
+            "jpx_corporate_action_source_files",
+            source_sql,
+        )
+
+    def test_unknown_security_is_rejected(
+        self,
+    ) -> None:
+        result = self.create_result()
+        connection, transaction, cursor = (
+            self.create_database_mock(
+                existing_security_codes=()
+            )
+        )
+
+        with patch(
+            "update_jpx_corporate_actions."
+            "create_database_connection",
+            return_value=connection,
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "securities",
+            ):
+                save_complete_jpx_coverage(
+                    result
+                )
+
+        cursor.executemany.assert_not_called()
+        transaction.__exit__.assert_called_once()
+
+        exit_arguments = (
+            transaction.__exit__.call_args.args
+        )
+        self.assertIs(
+            exit_arguments[0],
+            RuntimeError,
+        )
+
+    def test_invalid_hash_is_rejected_before_connection(
+        self,
+    ) -> None:
+        result = self.create_result(
+            content_sha256="invalid"
+        )
+
+        with patch(
+            "update_jpx_corporate_actions."
+            "create_database_connection",
+        ) as connection_mock:
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "SHA-256",
+            ):
+                save_complete_jpx_coverage(
+                    result
+                )
+
+        connection_mock.assert_not_called()
+
+    def test_missing_source_month_is_rejected(
+        self,
+    ) -> None:
+        january_source = JpxMonthlyPdfSource(
+            coverage_month=date(
+                2024,
+                1,
+                1,
+            ),
+            source_url=(
+                "https://www.jpx.co.jp/"
+                "markets/statistics-equities/monthly/"
+                "january-att/17_kenri2401.pdf"
+            ),
+        )
+        march_source = JpxMonthlyPdfSource(
+            coverage_month=date(
+                2024,
+                3,
+                1,
+            ),
+            source_url=(
+                "https://www.jpx.co.jp/"
+                "markets/statistics-equities/monthly/"
+                "march-att/17_kenri2403.pdf"
+            ),
+        )
+
+        result = ParsedJpxCoverage(
+            coverage_start=date(
+                2024,
+                1,
+                1,
+            ),
+            coverage_end=date(
+                2024,
+                3,
+                1,
+            ),
+            source_files=(
+                ParsedJpxMonthlySource(
+                    source=january_source,
+                    content_sha256="a" * 64,
+                    page_count=1,
+                    table_count=1,
+                    row_count=1,
+                    actions=(),
+                ),
+                ParsedJpxMonthlySource(
+                    source=march_source,
+                    content_sha256="b" * 64,
+                    page_count=1,
+                    table_count=1,
+                    row_count=1,
+                    actions=(),
+                ),
+            ),
+            actions=(),
+        )
+
+        with patch(
+            "update_jpx_corporate_actions."
+            "create_database_connection",
+        ) as connection_mock:
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "2024-02",
+            ):
+                save_complete_jpx_coverage(
+                    result
+                )
+
+        connection_mock.assert_not_called()
+
+    def test_action_without_source_month_is_rejected(
+        self,
+    ) -> None:
+        result = self.create_result(
+            include_action=False
+        )
+        outside_action = JpxCorporateAction(
+            security_code="1111",
+            effective_date=date(
+                2024,
+                3,
+                1,
+            ),
+            adjustment_factor=Decimal(
+                "0.5000000000"
+            ),
+            ex_right_type="1",
+            description="1:2 株式分割",
+        )
+        invalid_result = ParsedJpxCoverage(
+            coverage_start=(
+                result.coverage_start
+            ),
+            coverage_end=(
+                result.coverage_end
+            ),
+            source_files=(
+                result.source_files
+            ),
+            actions=(
+                outside_action,
+            ),
+        )
+
+        with patch(
+            "update_jpx_corporate_actions."
+            "create_database_connection",
+        ) as connection_mock:
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "取得元PDF",
+            ):
+                save_complete_jpx_coverage(
+                    invalid_result
+                )
+
+        connection_mock.assert_not_called()
+
+    def test_duplicate_actions_are_rejected(
+        self,
+    ) -> None:
+        result = self.create_result()
+        action = result.actions[0]
+        duplicate_result = ParsedJpxCoverage(
+            coverage_start=(
+                result.coverage_start
+            ),
+            coverage_end=(
+                result.coverage_end
+            ),
+            source_files=(
+                result.source_files
+            ),
+            actions=(
+                action,
+                action,
+            ),
+        )
+
+        with patch(
+            "update_jpx_corporate_actions."
+            "create_database_connection",
+        ) as connection_mock:
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "重複",
+            ):
+                save_complete_jpx_coverage(
+                    duplicate_result
+                )
+
+        connection_mock.assert_not_called()
 
 # ============================================================
 # エントリーポイント
