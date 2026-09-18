@@ -694,12 +694,30 @@ def main() -> None:
         )
         raise
 
+    if not observed_ranges:
+        error = RuntimeError(
+            "J-Quantsから対象銘柄を1件も取得できませんでした。"
+            "空の応答を完全取得として保存しません。"
+        )
+        save_failed_result(
+            security_codes,
+            start_date,
+            end_date,
+            error,
+        )
+        raise error
+
+    verified_to = max(
+        observed_range[1]
+        for observed_range in observed_ranges.values()
+    )
+
     save_complete_result(
         actions,
         security_codes,
         observed_ranges,
         start_date,
-        end_date,
+        verified_to,
         api_record_counts,
     )
 
