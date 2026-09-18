@@ -16,17 +16,20 @@ from __future__ import annotations
 
 import hashlib
 import re
+import time
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from io import BytesIO
 from typing import Any
+from urllib.parse import urlparse
 
 # ============================================================
 # 外部ライブラリ
 # ============================================================
 
 import pdfplumber
+import requests
 
 # ============================================================
 # 定数
@@ -71,6 +74,21 @@ PDF_TABLE_SETTINGS = {
     "intersection_tolerance": 5,
     "text_tolerance": 3,
 }
+
+JPX_ALLOWED_HOST = "www.jpx.co.jp"
+
+JPX_MONTHLY_PDF_PATH_PREFIX = (
+    "/markets/statistics-equities/monthly/"
+)
+
+REQUEST_TIMEOUT_SECONDS = 120
+MAX_DOWNLOAD_RETRIES = 4
+MAX_PDF_CONTENT_BYTES = 25 * 1024 * 1024
+
+HTTP_USER_AGENT = (
+    "progressive-dividend-screener/"
+    "jpx-corporate-actions"
+)
 
 # ============================================================
 # データ型
@@ -603,3 +621,237 @@ def parse_monthly_pdf(
         row_count=row_count,
         actions=actions,
     )
+
+
+
+# ============================================================
+# JPX月次PDFの取得
+# ============================================================
+
+def validate_jpx_monthly_pdf_url(
+    value: Any,
+) -> str:
+    """許可されたJPX月次PDFのURLだけを受け付ける。"""
+
+    url = normalize_text(value)
+
+    if not url:
+        raise RuntimeError(
+            "JPX月次PDFのURLが空です。"
+        )
+
+    parsed = urlparse(url)
+
+    if parsed.scheme.lower() != "https":
+        raise RuntimeError(
+            "JPX月次PDFのURLはhttpsである"
+            "必要があります。"
+        )
+
+    if parsed.hostname is None:
+        raise RuntimeError(
+            "JPX月次PDFのホスト名がありません。"
+        )
+
+    if parsed.hostname.lower() != JPX_ALLOWED_HOST:
+        raise RuntimeError(
+            "許可されていないJPX月次PDFの"
+            f"ホストです: {parsed.hostname}"
+        )
+
+    if parsed.username is not None or parsed.password is not None:
+        raise RuntimeError(
+            "JPX月次PDFのURLに認証情報を"
+            "含めることはできません。"
+        )
+
+    if not parsed.path.startswith(
+        JPX_MONTHLY_PDF_PATH_PREFIX
+    ):
+        raise RuntimeError(
+            "許可されていないJPX月次PDFの"
+            f"パスです: {parsed.path}"
+        )
+
+    if not parsed.path.lower().endswith(".pdf"):
+        raise RuntimeError(
+            "JPX月次PDFのURLが.pdfで"
+            "終わっていません。"
+        )
+
+    if parsed.query or parsed.fragment:
+        raise RuntimeError(
+            "JPX月次PDFのURLにクエリまたは"
+            "フラグメントは指定できません。"
+        )
+
+    return url
+
+
+def get_retry_wait_seconds(
+    response: requests.Response | None,
+    attempt: int,
+) -> float:
+    """Retry-Afterまたは試行回数から待機秒数を決める。"""
+
+    retry_after = ""
+
+    if response is not None:
+        retry_after = response.headers.get(
+            "Retry-After",
+            "",
+        )
+
+    try:
+        return max(
+            float(retry_after),
+            float(attempt * 5),
+        )
+    except ValueError:
+        return float(attempt * 5)
+
+
+def download_monthly_pdf(
+    session: requests.Session,
+    source_url: str,
+) -> bytes:
+    """
+    JPX公式URLから月次PDFを取得する。
+
+    一時的な通信障害、429、5xxだけを再試行する。
+    リダイレクト後のURLもJPX月次PDFの許可範囲内か確認する。
+    """
+
+    if not isinstance(
+        session,
+        requests.Session,
+    ):
+        raise RuntimeError(
+            "sessionがrequests.Sessionではありません。"
+        )
+
+    validated_url = validate_jpx_monthly_pdf_url(
+        source_url
+    )
+
+    last_error: Exception | None = None
+
+    for attempt in range(
+        1,
+        MAX_DOWNLOAD_RETRIES + 1,
+    ):
+        response: requests.Response | None = None
+
+        try:
+            response = session.get(
+                validated_url,
+                headers={
+                    "Accept": "application/pdf",
+                    "User-Agent": HTTP_USER_AGENT,
+                },
+                timeout=REQUEST_TIMEOUT_SECONDS,
+                allow_redirects=True,
+            )
+
+            response.raise_for_status()
+
+            final_url = validate_jpx_monthly_pdf_url(
+                response.url
+            )
+
+            if final_url != validated_url:
+                validated_url = final_url
+
+            content_length = response.headers.get(
+                "Content-Length",
+                "",
+            ).strip()
+
+            if content_length:
+                try:
+                    declared_size = int(
+                        content_length
+                    )
+                except ValueError as error:
+                    raise RuntimeError(
+                        "JPX PDFのContent-Lengthが"
+                        "整数ではありません。"
+                    ) from error
+
+                if declared_size < 0:
+                    raise RuntimeError(
+                        "JPX PDFのContent-Lengthが"
+                        "負数です。"
+                    )
+
+                if declared_size > MAX_PDF_CONTENT_BYTES:
+                    raise RuntimeError(
+                        "JPX PDFのContent-Lengthが"
+                        "上限を超えています。"
+                    )
+
+            content = response.content
+
+            if len(content) > MAX_PDF_CONTENT_BYTES:
+                raise RuntimeError(
+                    "JPX PDFの実データサイズが"
+                    "上限を超えています。"
+                )
+
+            validate_pdf_content(content)
+
+            return content
+
+        except (
+            requests.ConnectionError,
+            requests.Timeout,
+        ) as error:
+            last_error = error
+            retryable = True
+
+        except requests.HTTPError as error:
+            last_error = error
+            status_code = (
+                error.response.status_code
+                if error.response is not None
+                else None
+            )
+            retryable = (
+                status_code == 429
+                or (
+                    status_code is not None
+                    and status_code >= 500
+                )
+            )
+
+        except (
+            requests.RequestException,
+            RuntimeError,
+        ) as error:
+            last_error = error
+            retryable = False
+
+        if (
+            not retryable
+            or attempt == MAX_DOWNLOAD_RETRIES
+        ):
+            break
+
+        wait_seconds = get_retry_wait_seconds(
+            response,
+            attempt,
+        )
+
+        print(
+            "JPX月次PDFの取得を再試行します。"
+            f"試行={attempt}/{MAX_DOWNLOAD_RETRIES}, "
+            f"待機={wait_seconds:.1f}秒"
+        )
+
+        time.sleep(wait_seconds)
+
+    raise RuntimeError(
+        "JPX月次PDFの取得に失敗しました。"
+        f"エラー種別={type(last_error).__name__}, "
+        f"エラー={last_error}"
+    ) from last_error
