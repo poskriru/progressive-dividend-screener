@@ -334,7 +334,14 @@ def determine_required_date_range() -> tuple[date, date]:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
-                    WITH ranked AS (
+                    WITH distinct_periods AS (
+                        SELECT DISTINCT
+                            security_code,
+                            fiscal_period_end
+                        FROM screener.annual_financials
+                        WHERE fiscal_period_end IS NOT NULL
+                    ),
+                    ranked AS (
                         SELECT
                             security_code,
                             fiscal_period_end,
@@ -342,8 +349,7 @@ def determine_required_date_range() -> tuple[date, date]:
                                 PARTITION BY security_code
                                 ORDER BY fiscal_period_end DESC
                             ) AS period_rank
-                        FROM screener.annual_financials
-                        WHERE fiscal_period_end IS NOT NULL
+                        FROM distinct_periods
                     ),
                     required AS (
                         SELECT MIN(fiscal_period_end) AS required_from
