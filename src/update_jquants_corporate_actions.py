@@ -759,6 +759,10 @@ def main() -> None:
         )
         raise
 
+    # ========================================================
+    # 取得結果の検証・保存
+    # ========================================================
+
     if not observed_ranges:
         error = RuntimeError(
             "J-Quantsから対象銘柄を1件も取得できませんでした。"
@@ -772,17 +776,14 @@ def main() -> None:
         )
         raise error
 
-    verified_to = max(
-        observed_range[1]
-        for observed_range in observed_ranges.values()
-    )
-
+    # 対象日の全APIリクエストと全ページ取得が成功しているため、
+    # 日次レコードが存在しない休日等も確認済み範囲に含める。
     save_complete_result(
         actions,
         security_codes,
         observed_ranges,
         start_date,
-        verified_to,
+        end_date,
         api_record_counts,
     )
 
