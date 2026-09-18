@@ -14,12 +14,19 @@ from __future__ import annotations
 # 標準ライブラリ
 # ============================================================
 
+import hashlib
 import re
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from io import BytesIO
 from typing import Any
 
+# ============================================================
+# 外部ライブラリ
+# ============================================================
+
+import pdfplumber
 
 # ============================================================
 # 定数
@@ -56,6 +63,14 @@ RATIO_PATTERN = re.compile(
     r"(?P<after>\d+(?:\.\d+)?)"
 )
 
+PDF_TABLE_SETTINGS = {
+    "vertical_strategy": "text",
+    "horizontal_strategy": "text",
+    "snap_tolerance": 3,
+    "join_tolerance": 3,
+    "intersection_tolerance": 5,
+    "text_tolerance": 3,
+}
 
 # ============================================================
 # データ型
@@ -71,6 +86,16 @@ class JpxCorporateAction:
     ex_right_type: str
     description: str
 
+
+@dataclass(frozen=True)
+class ParsedJpxPdf:
+    """JPX月次PDF全体の解析結果。"""
+
+    content_sha256: str
+    page_count: int
+    table_count: int
+    row_count: int
+    actions: tuple[JpxCorporateAction, ...]
 
 # ============================================================
 # 共通変換
@@ -403,4 +428,178 @@ def parse_pdf_table_row(
         adjustment_factor=adjustment_factor,
         ex_right_type=ex_right_type,
         description=description,
+    )
+
+
+
+# ============================================================
+# JPX月次PDF全体の解析
+# ============================================================
+
+def validate_pdf_content(
+    content: bytes,
+) -> None:
+    """ダウンロード内容がPDFバイナリであることを確認する。"""
+
+    if not isinstance(content, bytes):
+        raise RuntimeError(
+            "JPX PDFの内容がbytesではありません。"
+        )
+
+    if not content:
+        raise RuntimeError(
+            "JPX PDFの内容が空です。"
+        )
+
+    if not content.startswith(b"%PDF"):
+        raise RuntimeError(
+            "JPXから取得した内容がPDFではありません。"
+        )
+
+
+def parse_monthly_pdf(
+    content: bytes,
+) -> ParsedJpxPdf:
+    """
+    JPX月次PDFの全ページ・全表を解析する。
+
+    タイトル、ページ数、表数、行数を確認し、表を1件も
+    抽出できない場合はcompleteとして扱わない。
+    同一銘柄・権利落ち日の内容が矛盾する場合も失敗させる。
+    """
+
+    validate_pdf_content(content)
+
+    content_sha256 = hashlib.sha256(
+        content
+    ).hexdigest()
+
+    page_count = 0
+    table_count = 0
+    row_count = 0
+    extracted_text_parts: list[str] = []
+
+    actions_by_key: dict[
+        tuple[str, date],
+        JpxCorporateAction,
+    ] = {}
+
+    try:
+        with pdfplumber.open(
+            BytesIO(content)
+        ) as pdf:
+            page_count = len(pdf.pages)
+
+            if page_count < 1:
+                raise RuntimeError(
+                    "JPX PDFにページがありません。"
+                )
+
+            for page in pdf.pages:
+                page_text = normalize_text(
+                    page.extract_text() or ""
+                )
+
+                if page_text:
+                    extracted_text_parts.append(
+                        page_text
+                    )
+
+                tables = page.extract_tables(
+                    PDF_TABLE_SETTINGS
+                )
+
+                for table in tables:
+                    if not isinstance(table, list):
+                        raise RuntimeError(
+                            "JPX PDFの表がlistではありません。"
+                        )
+
+                    table_count += 1
+
+                    for row in table:
+                        row_count += 1
+                        action = parse_pdf_table_row(
+                            row
+                        )
+
+                        if action is None:
+                            continue
+
+                        key = (
+                            action.security_code,
+                            action.effective_date,
+                        )
+
+                        existing = actions_by_key.get(
+                            key
+                        )
+
+                        if existing is not None:
+                            same_action = (
+                                existing.adjustment_factor
+                                == action.adjustment_factor
+                                and existing.ex_right_type
+                                == action.ex_right_type
+                            )
+
+                            if not same_action:
+                                raise RuntimeError(
+                                    "JPX PDF内の同一銘柄・"
+                                    "権利落ち日に矛盾する"
+                                    "企業行動があります。"
+                                    f"code={action.security_code}, "
+                                    f"date={action.effective_date}"
+                                )
+
+                            continue
+
+                        actions_by_key[key] = action
+
+    except RuntimeError:
+        raise
+
+    except Exception as error:
+        raise RuntimeError(
+            "JPX月次PDFの解析に失敗しました。"
+            f"エラー種別={type(error).__name__}"
+        ) from error
+
+    extracted_text = normalize_text(
+        " ".join(extracted_text_parts)
+    )
+
+    if "新株落・権利落等一覧" not in extracted_text:
+        raise RuntimeError(
+            "JPX月次PDFのタイトルを確認できません。"
+        )
+
+    if table_count < 1:
+        raise RuntimeError(
+            "JPX月次PDFから表を1件も"
+            "抽出できませんでした。"
+        )
+
+    if row_count < 1:
+        raise RuntimeError(
+            "JPX月次PDFから表の行を1件も"
+            "抽出できませんでした。"
+        )
+
+    actions = tuple(
+        sorted(
+            actions_by_key.values(),
+            key=lambda action: (
+                action.effective_date,
+                action.security_code,
+            ),
+        )
+    )
+
+    return ParsedJpxPdf(
+        content_sha256=content_sha256,
+        page_count=page_count,
+        table_count=table_count,
+        row_count=row_count,
+        actions=actions,
     )
