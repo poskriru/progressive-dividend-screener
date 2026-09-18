@@ -633,11 +633,20 @@ def validate_jpx_monthly_pdf_url(
 ) -> str:
     """許可されたJPX月次PDFのURLだけを受け付ける。"""
 
-    url = normalize_text(value)
+    url = str(value or "").strip()
 
     if not url:
         raise RuntimeError(
             "JPX月次PDFのURLが空です。"
+        )
+
+    if any(
+        character.isspace()
+        for character in url
+    ):
+        raise RuntimeError(
+            "JPX月次PDFのURLに空白文字を"
+            "含めることはできません。"
         )
 
     parsed = urlparse(url)
@@ -665,12 +674,36 @@ def validate_jpx_monthly_pdf_url(
             "含めることはできません。"
         )
 
+    try:
+        port = parsed.port
+    except ValueError as error:
+        raise RuntimeError(
+            "JPX月次PDFのポート番号が不正です。"
+        ) from error
+
+    if port not in (None, 443):
+        raise RuntimeError(
+            "JPX月次PDFのURLには標準HTTPS"
+            "ポートだけを指定できます。"
+        )
+
     if not parsed.path.startswith(
         JPX_MONTHLY_PDF_PATH_PREFIX
     ):
         raise RuntimeError(
             "許可されていないJPX月次PDFの"
             f"パスです: {parsed.path}"
+        )
+
+    path_segments = parsed.path.split("/")
+
+    if (
+        ".." in path_segments
+        or "%2e" in parsed.path.lower()
+    ):
+        raise RuntimeError(
+            "JPX月次PDFのURLに不正な"
+            "パス要素があります。"
         )
 
     if not parsed.path.lower().endswith(".pdf"):
@@ -720,6 +753,7 @@ def download_monthly_pdf(
 
     一時的な通信障害、429、5xxだけを再試行する。
     リダイレクト後のURLもJPX月次PDFの許可範囲内か確認する。
+    ファイルはストリーミングで読み込み、上限超過時点で停止する。
     """
 
     if not isinstance(
@@ -751,6 +785,7 @@ def download_monthly_pdf(
                 },
                 timeout=REQUEST_TIMEOUT_SECONDS,
                 allow_redirects=True,
+                stream=True,
             )
 
             response.raise_for_status()
@@ -790,16 +825,30 @@ def download_monthly_pdf(
                         "上限を超えています。"
                     )
 
-            content = response.content
+            content_buffer = bytearray()
 
-            if len(content) > MAX_PDF_CONTENT_BYTES:
-                raise RuntimeError(
-                    "JPX PDFの実データサイズが"
-                    "上限を超えています。"
-                )
+            for chunk in response.iter_content(
+                chunk_size=64 * 1024
+            ):
+                if not chunk:
+                    continue
+
+                content_buffer.extend(chunk)
+
+                if (
+                    len(content_buffer)
+                    > MAX_PDF_CONTENT_BYTES
+                ):
+                    raise RuntimeError(
+                        "JPX PDFの実データサイズが"
+                        "上限を超えています。"
+                    )
+
+            content = bytes(content_buffer)
 
             validate_pdf_content(content)
 
+            response.close()
             return content
 
         except (
@@ -830,6 +879,9 @@ def download_monthly_pdf(
         ) as error:
             last_error = error
             retryable = False
+
+        if response is not None:
+            response.close()
 
         if (
             not retryable
