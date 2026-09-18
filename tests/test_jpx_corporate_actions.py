@@ -23,8 +23,10 @@ sys.path.insert(
 )
 
 from update_jpx_corporate_actions import (  # noqa: E402
+    MAX_HTML_CONTENT_BYTES,
     JpxCorporateAction,
     JpxMonthlyPdfSource,
+    download_monthly_page,
     download_monthly_pdf,
     extract_month_from_pdf_url,
     extract_ratio,
@@ -37,11 +39,11 @@ from update_jpx_corporate_actions import (  # noqa: E402
     parse_monthly_pdf,
     parse_monthly_pdf_sources,
     parse_pdf_table_row,
+    validate_html_content,
     validate_jpx_monthly_page_url,
     validate_jpx_monthly_pdf_url,
     validate_pdf_content,
 )
-
 
 # ============================================================
 # 共通変換
@@ -1513,6 +1515,467 @@ class JpxMonthlyPdfSourceParsingTest(unittest.TestCase):
             parse_monthly_pdf_sources(
                 None,  # type: ignore[arg-type]
                 page_url=self.ARCHIVE_2022_URL,
+            )
+
+# ============================================================
+# JPX統計月報ページ取得テスト
+# ============================================================
+
+class JpxMonthlyPageDownloadTest(unittest.TestCase):
+    """JPX統計月報ページの安全な取得を検証する。"""
+
+    INDEX_URL = (
+        "https://www.jpx.co.jp/"
+        "markets/statistics-equities/monthly/index.html"
+    )
+
+    ARCHIVE_URL = (
+        "https://www.jpx.co.jp/"
+        "markets/statistics-equities/monthly/"
+        "00-archives-04.html"
+    )
+
+    HTML_CONTENT = (
+        "<!doctype html>"
+        "<html lang=\"ja\">"
+        "<head><title>月間相場表</title></head>"
+        "<body>新株落・権利落等一覧</body>"
+        "</html>"
+    ).encode("utf-8")
+
+    @staticmethod
+    def create_response(
+        *,
+        url: str,
+        status_code: int = 200,
+        headers: dict[str, str] | None = None,
+        chunks: list[bytes] | None = None,
+    ) -> MagicMock:
+        """HTTPレスポンスのモックを作成する。"""
+
+        response = MagicMock(
+            spec=requests.Response
+        )
+        response.url = url
+        response.status_code = status_code
+        response.headers = headers or {
+            "Content-Type": (
+                "text/html; charset=UTF-8"
+            ),
+        }
+        response.iter_content.return_value = iter(
+            chunks or []
+        )
+
+        if status_code >= 400:
+            response.raise_for_status.side_effect = (
+                requests.HTTPError(
+                    f"HTTP {status_code}"
+                )
+            )
+
+        return response
+
+    def test_valid_html_content_is_decoded(
+        self,
+    ) -> None:
+        html = validate_html_content(
+            self.HTML_CONTENT
+        )
+
+        self.assertIn(
+            "新株落・権利落等一覧",
+            html,
+        )
+
+    def test_utf8_bom_is_accepted(
+        self,
+    ) -> None:
+        content = (
+            b"\xef\xbb\xbf"
+            b"<!doctype html><html></html>"
+        )
+
+        self.assertEqual(
+            validate_html_content(content),
+            "<!doctype html><html></html>",
+        )
+
+    def test_invalid_html_contents_are_rejected(
+        self,
+    ) -> None:
+        invalid_contents = (
+            b"",
+            b"%PDF-1.7",
+            b"plain text",
+            b"\xff\xfe\x00\x00",
+        )
+
+        for content in invalid_contents:
+            with self.subTest(content=content):
+                with self.assertRaises(
+                    RuntimeError
+                ):
+                    validate_html_content(content)
+
+    def test_non_bytes_html_is_rejected(
+        self,
+    ) -> None:
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "bytes",
+        ):
+            validate_html_content(  # type: ignore[arg-type]
+                "<html></html>"
+            )
+
+    def test_html_larger_than_limit_is_rejected(
+        self,
+    ) -> None:
+        content = (
+            b"<html>"
+            + b"x" * MAX_HTML_CONTENT_BYTES
+            + b"</html>"
+        )
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "上限",
+        ):
+            validate_html_content(content)
+
+    def test_page_is_downloaded_as_stream(
+        self,
+    ) -> None:
+        response = self.create_response(
+            url=self.INDEX_URL,
+            headers={
+                "Content-Type": (
+                    "text/html; charset=UTF-8"
+                ),
+                "Content-Length": str(
+                    len(self.HTML_CONTENT)
+                ),
+            },
+            chunks=[
+                self.HTML_CONTENT[:20],
+                b"",
+                self.HTML_CONTENT[20:],
+            ],
+        )
+        session = requests.Session()
+
+        with patch.object(
+            session,
+            "get",
+            return_value=response,
+        ) as get_mock:
+            html = download_monthly_page(
+                session,
+                self.INDEX_URL,
+            )
+
+        self.assertIn(
+            "新株落・権利落等一覧",
+            html,
+        )
+        get_mock.assert_called_once_with(
+            self.INDEX_URL,
+            headers={
+                "User-Agent": (
+                    "progressive-dividend-screener/"
+                    "jpx-corporate-actions"
+                ),
+                "Accept": (
+                    "text/html,"
+                    "application/xhtml+xml"
+                ),
+            },
+            timeout=120,
+            allow_redirects=True,
+            stream=True,
+        )
+        response.close.assert_called_once()
+
+    def test_allowed_redirect_is_accepted(
+        self,
+    ) -> None:
+        response = self.create_response(
+            url=self.ARCHIVE_URL,
+            chunks=[self.HTML_CONTENT],
+        )
+        session = requests.Session()
+
+        with patch.object(
+            session,
+            "get",
+            return_value=response,
+        ):
+            html = download_monthly_page(
+                session,
+                self.INDEX_URL,
+            )
+
+        self.assertIn(
+            "<html",
+            html.lower(),
+        )
+        response.close.assert_called_once()
+
+    def test_external_redirect_is_rejected(
+        self,
+    ) -> None:
+        response = self.create_response(
+            url=(
+                "https://example.com/"
+                "markets/statistics-equities/monthly/"
+                "index.html"
+            ),
+            chunks=[self.HTML_CONTENT],
+        )
+        session = requests.Session()
+
+        with patch.object(
+            session,
+            "get",
+            return_value=response,
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "ホスト",
+            ):
+                download_monthly_page(
+                    session,
+                    self.INDEX_URL,
+                )
+
+        response.close.assert_called_once()
+
+    def test_non_html_content_type_is_rejected(
+        self,
+    ) -> None:
+        response = self.create_response(
+            url=self.INDEX_URL,
+            headers={
+                "Content-Type": "application/pdf",
+            },
+            chunks=[self.HTML_CONTENT],
+        )
+        session = requests.Session()
+
+        with patch.object(
+            session,
+            "get",
+            return_value=response,
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "Content-Type",
+            ):
+                download_monthly_page(
+                    session,
+                    self.INDEX_URL,
+                )
+
+        response.close.assert_called_once()
+
+    def test_invalid_content_length_is_rejected(
+        self,
+    ) -> None:
+        invalid_lengths = (
+            "invalid",
+            "-1",
+            str(MAX_HTML_CONTENT_BYTES + 1),
+        )
+
+        for content_length in invalid_lengths:
+            with self.subTest(
+                content_length=content_length
+            ):
+                response = self.create_response(
+                    url=self.INDEX_URL,
+                    headers={
+                        "Content-Type": "text/html",
+                        "Content-Length": (
+                            content_length
+                        ),
+                    },
+                    chunks=[self.HTML_CONTENT],
+                )
+                session = requests.Session()
+
+                with patch.object(
+                    session,
+                    "get",
+                    return_value=response,
+                ):
+                    with self.assertRaises(
+                        RuntimeError
+                    ):
+                        download_monthly_page(
+                            session,
+                            self.INDEX_URL,
+                        )
+
+                response.close.assert_called_once()
+
+    def test_stream_larger_than_limit_is_rejected(
+        self,
+    ) -> None:
+        response = self.create_response(
+            url=self.INDEX_URL,
+            chunks=[
+                b"<html>",
+                b"x" * MAX_HTML_CONTENT_BYTES,
+            ],
+        )
+        session = requests.Session()
+
+        with patch.object(
+            session,
+            "get",
+            return_value=response,
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "実データサイズ",
+            ):
+                download_monthly_page(
+                    session,
+                    self.INDEX_URL,
+                )
+
+        response.close.assert_called_once()
+
+    def test_server_error_is_retried(
+        self,
+    ) -> None:
+        failed_response = self.create_response(
+            url=self.INDEX_URL,
+            status_code=500,
+            headers={
+                "Content-Type": "text/html",
+                "Retry-After": "0",
+            },
+        )
+        successful_response = self.create_response(
+            url=self.INDEX_URL,
+            chunks=[self.HTML_CONTENT],
+        )
+        session = requests.Session()
+
+        with (
+            patch.object(
+                session,
+                "get",
+                side_effect=[
+                    failed_response,
+                    successful_response,
+                ],
+            ) as get_mock,
+            patch(
+                "update_jpx_corporate_actions.time.sleep"
+            ) as sleep_mock,
+        ):
+            html = download_monthly_page(
+                session,
+                self.INDEX_URL,
+            )
+
+        self.assertIn(
+            "<html",
+            html.lower(),
+        )
+        self.assertEqual(
+            get_mock.call_count,
+            2,
+        )
+        sleep_mock.assert_called_once()
+        failed_response.close.assert_called_once()
+        successful_response.close.assert_called_once()
+
+    def test_connection_error_is_retried(
+        self,
+    ) -> None:
+        successful_response = self.create_response(
+            url=self.INDEX_URL,
+            chunks=[self.HTML_CONTENT],
+        )
+        session = requests.Session()
+
+        with (
+            patch.object(
+                session,
+                "get",
+                side_effect=[
+                    requests.ConnectionError(
+                        "temporary failure"
+                    ),
+                    successful_response,
+                ],
+            ) as get_mock,
+            patch(
+                "update_jpx_corporate_actions.time.sleep"
+            ) as sleep_mock,
+        ):
+            html = download_monthly_page(
+                session,
+                self.INDEX_URL,
+            )
+
+        self.assertIn(
+            "<html",
+            html.lower(),
+        )
+        self.assertEqual(
+            get_mock.call_count,
+            2,
+        )
+        sleep_mock.assert_called_once()
+        successful_response.close.assert_called_once()
+
+    def test_client_error_is_not_retried(
+        self,
+    ) -> None:
+        response = self.create_response(
+            url=self.INDEX_URL,
+            status_code=404,
+        )
+        session = requests.Session()
+
+        with (
+            patch.object(
+                session,
+                "get",
+                return_value=response,
+            ) as get_mock,
+            patch(
+                "update_jpx_corporate_actions.time.sleep"
+            ) as sleep_mock,
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "HTTPError",
+            ):
+                download_monthly_page(
+                    session,
+                    self.INDEX_URL,
+                )
+
+        get_mock.assert_called_once()
+        sleep_mock.assert_not_called()
+        response.close.assert_called_once()
+
+    def test_invalid_session_is_rejected(
+        self,
+    ) -> None:
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "requests.Session",
+        ):
+            download_monthly_page(
+                MagicMock(),
+                self.INDEX_URL,
             )
 
 # ============================================================
