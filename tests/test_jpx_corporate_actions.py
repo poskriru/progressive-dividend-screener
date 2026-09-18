@@ -26,6 +26,7 @@ from update_jpx_corporate_actions import (  # noqa: E402
     MAX_HTML_CONTENT_BYTES,
     JpxCorporateAction,
     JpxMonthlyPdfSource,
+    build_month_range,
     discover_monthly_pdf_sources,
     download_monthly_page,
     download_monthly_pdf,
@@ -34,6 +35,8 @@ from update_jpx_corporate_actions import (  # noqa: E402
     find_effective_date_in_row,
     find_security_code_in_row,
     merge_monthly_pdf_sources,
+    next_month,
+    normalize_month,
     normalize_security_code,
     normalize_text,
     parse_action_description,
@@ -42,6 +45,7 @@ from update_jpx_corporate_actions import (  # noqa: E402
     parse_monthly_pdf,
     parse_monthly_pdf_sources,
     parse_pdf_table_row,
+    select_monthly_pdf_sources,
     validate_html_content,
     validate_jpx_monthly_page_url,
     validate_jpx_monthly_pdf_url,
@@ -2390,6 +2394,348 @@ class JpxMonthlyArchiveDiscoveryTest(unittest.TestCase):
         ):
             discover_monthly_pdf_sources(
                 MagicMock()
+            )
+
+# ============================================================
+# JPX対象期間選択テスト
+# ============================================================
+
+class JpxMonthlyCoverageSelectionTest(unittest.TestCase):
+    """JPX月次PDFの対象期間選択を検証する。"""
+
+    @staticmethod
+    def create_source(
+        year: int,
+        month: int,
+        *,
+        directory: str = "example-att",
+    ) -> JpxMonthlyPdfSource:
+        """指定年月のテスト用PDF情報を作成する。"""
+
+        return JpxMonthlyPdfSource(
+            coverage_month=date(
+                year,
+                month,
+                1,
+            ),
+            source_url=(
+                "https://www.jpx.co.jp/"
+                "markets/statistics-equities/monthly/"
+                f"{directory}/"
+                f"17_kenri{year % 100:02d}"
+                f"{month:02d}.pdf"
+            ),
+        )
+
+    def test_date_is_normalized_to_month_start(
+        self,
+    ) -> None:
+        self.assertEqual(
+            normalize_month(
+                date(2024, 10, 31),
+                field_name="対象日",
+            ),
+            date(2024, 10, 1),
+        )
+
+    def test_non_date_month_is_rejected(
+        self,
+    ) -> None:
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "date",
+        ):
+            normalize_month(
+                "2024-10",  # type: ignore[arg-type]
+                field_name="対象月",
+            )
+
+    def test_next_month_handles_year_boundary(
+        self,
+    ) -> None:
+        self.assertEqual(
+            next_month(
+                date(2023, 12, 15)
+            ),
+            date(2024, 1, 1),
+        )
+
+    def test_month_range_is_inclusive(
+        self,
+    ) -> None:
+        self.assertEqual(
+            build_month_range(
+                date(2023, 11, 30),
+                date(2024, 2, 29),
+            ),
+            (
+                date(2023, 11, 1),
+                date(2023, 12, 1),
+                date(2024, 1, 1),
+                date(2024, 2, 1),
+            ),
+        )
+
+    def test_start_after_end_is_rejected(
+        self,
+    ) -> None:
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "開始月",
+        ):
+            build_month_range(
+                date(2024, 2, 1),
+                date(2024, 1, 1),
+            )
+
+    def test_month_count_limit_is_enforced(
+        self,
+    ) -> None:
+        with patch(
+            "update_jpx_corporate_actions."
+            "MAX_COVERAGE_MONTH_COUNT",
+            2,
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "安全上限",
+            ):
+                build_month_range(
+                    date(2024, 1, 1),
+                    date(2024, 3, 1),
+                )
+
+    def test_complete_period_is_selected_in_order(
+        self,
+    ) -> None:
+        january = self.create_source(
+            2024,
+            1,
+        )
+        february = self.create_source(
+            2024,
+            2,
+        )
+        march = self.create_source(
+            2024,
+            3,
+        )
+        outside = self.create_source(
+            2023,
+            12,
+        )
+
+        selected = select_monthly_pdf_sources(
+            (
+                march,
+                outside,
+                january,
+                february,
+            ),
+            coverage_start=date(2024, 1, 20),
+            coverage_end=date(2024, 3, 31),
+        )
+
+        self.assertEqual(
+            selected,
+            (
+                january,
+                february,
+                march,
+            ),
+        )
+
+    def test_source_outside_period_is_ignored(
+        self,
+    ) -> None:
+        january = self.create_source(
+            2024,
+            1,
+        )
+        december = self.create_source(
+            2023,
+            12,
+        )
+        february = self.create_source(
+            2024,
+            2,
+        )
+
+        selected = select_monthly_pdf_sources(
+            (
+                december,
+                january,
+                february,
+            ),
+            coverage_start=date(2024, 1, 1),
+            coverage_end=date(2024, 1, 31),
+        )
+
+        self.assertEqual(
+            selected,
+            (
+                january,
+            ),
+        )
+
+    def test_same_source_is_deduplicated(
+        self,
+    ) -> None:
+        january = self.create_source(
+            2024,
+            1,
+        )
+
+        selected = select_monthly_pdf_sources(
+            (
+                january,
+                january,
+            ),
+            coverage_start=date(2024, 1, 1),
+            coverage_end=date(2024, 1, 1),
+        )
+
+        self.assertEqual(
+            selected,
+            (
+                january,
+            ),
+        )
+
+    def test_conflicting_source_is_rejected(
+        self,
+    ) -> None:
+        first = self.create_source(
+            2024,
+            1,
+            directory="first-att",
+        )
+        second = self.create_source(
+            2024,
+            1,
+            directory="second-att",
+        )
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "同一対象年月",
+        ):
+            select_monthly_pdf_sources(
+                (
+                    first,
+                    second,
+                ),
+                coverage_start=date(2024, 1, 1),
+                coverage_end=date(2024, 1, 1),
+            )
+
+    def test_missing_month_is_rejected(
+        self,
+    ) -> None:
+        january = self.create_source(
+            2024,
+            1,
+        )
+        march = self.create_source(
+            2024,
+            3,
+        )
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "2024-02",
+        ):
+            select_monthly_pdf_sources(
+                (
+                    january,
+                    march,
+                ),
+                coverage_start=date(2024, 1, 1),
+                coverage_end=date(2024, 3, 1),
+            )
+
+    def test_non_month_start_source_is_rejected(
+        self,
+    ) -> None:
+        source = JpxMonthlyPdfSource(
+            coverage_month=date(
+                2024,
+                1,
+                15,
+            ),
+            source_url=(
+                "https://www.jpx.co.jp/"
+                "markets/statistics-equities/monthly/"
+                "example-att/17_kenri2401.pdf"
+            ),
+        )
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "月初",
+        ):
+            select_monthly_pdf_sources(
+                (
+                    source,
+                ),
+                coverage_start=date(2024, 1, 1),
+                coverage_end=date(2024, 1, 31),
+            )
+
+    def test_invalid_source_url_is_rejected(
+        self,
+    ) -> None:
+        source = JpxMonthlyPdfSource(
+            coverage_month=date(
+                2024,
+                1,
+                1,
+            ),
+            source_url=(
+                "https://example.com/"
+                "markets/statistics-equities/monthly/"
+                "example-att/17_kenri2401.pdf"
+            ),
+        )
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "ホスト",
+        ):
+            select_monthly_pdf_sources(
+                (
+                    source,
+                ),
+                coverage_start=date(2024, 1, 1),
+                coverage_end=date(2024, 1, 1),
+            )
+
+    def test_invalid_sources_container_is_rejected(
+        self,
+    ) -> None:
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "tuple",
+        ):
+            select_monthly_pdf_sources(
+                [],  # type: ignore[arg-type]
+                coverage_start=date(2024, 1, 1),
+                coverage_end=date(2024, 1, 1),
+            )
+
+    def test_invalid_source_type_is_rejected(
+        self,
+    ) -> None:
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "型",
+        ):
+            select_monthly_pdf_sources(
+                (
+                    "invalid",  # type: ignore[arg-type]
+                ),
+                coverage_start=date(2024, 1, 1),
+                coverage_end=date(2024, 1, 1),
             )
 
 # ============================================================
