@@ -136,6 +136,12 @@ IS
 
 
 COMMENT ON COLUMN
+    screener.jpx_corporate_action_source_files.source_file_id
+IS
+    '取得元ファイルを一意に識別するID。';
+
+
+COMMENT ON COLUMN
     screener.jpx_corporate_action_source_files.source_kind
 IS
     '取得元種別。monthly_pdfまたはdaily_excel。';
@@ -154,6 +160,18 @@ IS
 
 
 COMMENT ON COLUMN
+    screener.jpx_corporate_action_source_files.publication_date
+IS
+    'JPXが取得元ファイルを公開した日。';
+
+
+COMMENT ON COLUMN
+    screener.jpx_corporate_action_source_files.source_url
+IS
+    'JPX取得元ファイルのURL。';
+
+
+COMMENT ON COLUMN
     screener.jpx_corporate_action_source_files.content_sha256
 IS
     '取得した元ファイルのSHA-256。内容変更の検知に使用する。';
@@ -163,6 +181,36 @@ COMMENT ON COLUMN
     screener.jpx_corporate_action_source_files.sync_status
 IS
     '取得結果。completeまたはfailed。';
+
+
+COMMENT ON COLUMN
+    screener.jpx_corporate_action_source_files.record_count
+IS
+    '取得元ファイルから取り込んだcorporate actionレコード数。';
+
+
+COMMENT ON COLUMN
+    screener.jpx_corporate_action_source_files.last_error
+IS
+    '取得または解析に失敗した場合のエラー内容。';
+
+
+COMMENT ON COLUMN
+    screener.jpx_corporate_action_source_files.fetched_at
+IS
+    '取得元ファイルを取得した日時。';
+
+
+COMMENT ON COLUMN
+    screener.jpx_corporate_action_source_files.created_at
+IS
+    '取得結果レコードを作成した日時。';
+
+
+COMMENT ON COLUMN
+    screener.jpx_corporate_action_source_files.updated_at
+IS
+    '取得結果レコードを最後に更新した日時。';
 
 
 -- ============================================================
