@@ -48,6 +48,7 @@ EXPECTED_TABLES = {
     "annual_financials",
     "corporate_actions",
     "jquants_adjustment_sync_status",
+    "jpx_corporate_action_source_files",
 }
 
 EXPECTED_VIEWS = {
@@ -56,7 +57,6 @@ EXPECTED_VIEWS = {
     "company_dividend_metrics_adjusted",
     "company_screener_with_dividends",
 }
-
 
 # ============================================================
 # 環境変数
