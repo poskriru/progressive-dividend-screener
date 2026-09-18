@@ -581,6 +581,206 @@ def calculate_candidate_changes(
 
 
 # ============================================================
+# 候補除外理由
+# ============================================================
+
+def to_finite_decimal(value: Any) -> Decimal | None:
+    """比較用の有限なDecimalへ変換する。"""
+
+    if value is None:
+        return None
+
+    try:
+        number = Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None
+
+    if not number.is_finite():
+        return None
+
+    return number
+
+
+def diagnose_candidate_exclusion(
+    record: dict[str, Any],
+    criteria: CandidateCriteria,
+) -> tuple[str, ...]:
+    """現在の指標から候補を外れた理由を列挙する。"""
+
+    reasons: list[str] = []
+
+    if (
+        record.get("annual_financial_id") is None
+        or record.get("close_price") is None
+    ):
+        reasons.append("財務・株価データ不足")
+
+    if record.get("is_progressive_dividend_5y_raw") is not True:
+        status = str(
+            record.get("progressive_dividend_status_5y", "")
+            or ""
+        )
+        status_labels = {
+            "dividend_cut": "5期内に減配",
+            "non_positive_dividend": "無配・非正配当",
+            "missing_dividend": "配当データ欠損",
+            "irregular_fiscal_periods": "決算期間不整合",
+            "insufficient_history": "配当履歴不足",
+            "progressive": "累進配当判定不可",
+            "": "累進配当判定不可",
+        }
+        reasons.append(
+            status_labels.get(
+                status,
+                f"累進配当判定: {status}",
+            )
+        )
+
+    dividend_yield = to_finite_decimal(
+        record.get("dividend_yield_percent")
+    )
+    if dividend_yield is None:
+        reasons.append("配当利回り算出不可")
+    elif dividend_yield < criteria.min_dividend_yield_percent:
+        reasons.append(
+            "配当利回りが下限未満"
+            f"（{dividend_yield:.2f}%）"
+        )
+
+    payout_ratio = to_finite_decimal(
+        record.get("payout_ratio_percent")
+    )
+    if payout_ratio is None:
+        reasons.append("配当性向算出不可")
+    elif (
+        payout_ratio < 0
+        or payout_ratio > criteria.max_payout_ratio_percent
+    ):
+        reasons.append(
+            "配当性向が範囲外"
+            f"（{payout_ratio:.2f}%）"
+        )
+
+    per_ratio = to_finite_decimal(
+        record.get("per_ratio")
+    )
+    if per_ratio is None or per_ratio <= 0:
+        reasons.append("PER算出不可")
+    elif per_ratio > criteria.max_per_ratio:
+        reasons.append(
+            f"PERが上限超過（{per_ratio:.2f}倍）"
+        )
+
+    pbr_ratio = to_finite_decimal(
+        record.get("pbr_ratio")
+    )
+    if pbr_ratio is None or pbr_ratio <= 0:
+        reasons.append("PBR算出不可")
+    elif pbr_ratio > criteria.max_pbr_ratio:
+        reasons.append(
+            f"PBRが上限超過（{pbr_ratio:.2f}倍）"
+        )
+
+    roe_percent = to_finite_decimal(
+        record.get("roe_percent")
+    )
+    if roe_percent is None:
+        reasons.append("ROE算出不可")
+    elif roe_percent < criteria.min_roe_percent:
+        reasons.append(
+            f"ROEが下限未満（{roe_percent:.2f}%）"
+        )
+
+    if criteria.require_positive_free_cash_flow:
+        free_cash_flow = to_finite_decimal(
+            record.get("free_cash_flow_jpy")
+        )
+        if free_cash_flow is None:
+            reasons.append("フリーCF算出不可")
+        elif free_cash_flow <= 0:
+            reasons.append("フリーCFが0以下")
+
+    if not reasons:
+        reasons.append(
+            f"ランキング上限{criteria.max_candidates}件の対象外"
+        )
+
+    return tuple(reasons)
+
+
+def load_removed_candidate_reasons(
+    changes: CandidateChanges,
+    criteria: CandidateCriteria,
+) -> dict[str, tuple[str, ...]]:
+    """候補から外れた銘柄の現在指標を取得し理由を判定する。"""
+
+    removed_codes = [
+        security_code
+        for security_code, _
+        in changes.removed_candidates
+    ]
+
+    if not removed_codes:
+        return {}
+
+    query = """
+        SELECT
+            security_code,
+            annual_financial_id,
+            close_price,
+            is_progressive_dividend_5y_raw,
+            progressive_dividend_status_5y,
+            dividend_yield_percent,
+            payout_ratio_percent,
+            per_ratio,
+            pbr_ratio,
+            roe_percent,
+            free_cash_flow_jpy
+        FROM screener.company_screener_with_dividends
+        WHERE security_code = ANY(%s)
+        ORDER BY security_code;
+    """
+
+    with create_database_connection(
+        "diagnose_candidate_exclusions"
+    ) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                query,
+                (removed_codes,),
+            )
+            records_by_code = {
+                str(row["security_code"]): dict(row)
+                for row in cursor.fetchall()
+            }
+
+    reasons_by_code: dict[str, tuple[str, ...]] = {}
+
+    for security_code in removed_codes:
+        record = records_by_code.get(security_code)
+
+        if record is None:
+            reasons_by_code[security_code] = (
+                "現在の銘柄データなし",
+            )
+            continue
+
+        reasons_by_code[security_code] = (
+            diagnose_candidate_exclusion(
+                record,
+                criteria,
+            )
+        )
+
+    print(
+        "候補から外れた理由を判定しました。"
+        f"件数: {len(reasons_by_code):,}"
+    )
+
+    return reasons_by_code
+
+
+# ============================================================
 # Discord通知
 # ============================================================
 
@@ -610,6 +810,7 @@ def build_discord_notification_description(
     records: list[dict[str, Any]],
     criteria: CandidateCriteria,
     changes: CandidateChanges,
+    removed_reasons: dict[str, tuple[str, ...]],
     *,
     display_limit: int = 10,
 ) -> str:
@@ -644,12 +845,23 @@ def build_discord_notification_description(
             lines.append(f"新規: {added_text}")
 
         if changes.removed_candidates:
-            removed_text = ", ".join(
-                f"`{code}` {name}"
-                for code, name
-                in changes.removed_candidates[:display_limit]
+            removed_items: list[str] = []
+
+            for code, name in (
+                changes.removed_candidates[:display_limit]
+            ):
+                reasons = removed_reasons.get(
+                    code,
+                    ("理由取得不可",),
+                )
+                reason_text = " / ".join(reasons)
+                removed_items.append(
+                    f"`{code}` {name}（{reason_text}）"
+                )
+
+            lines.append(
+                "除外: " + ", ".join(removed_items)
             )
-            lines.append(f"除外: {removed_text}")
     else:
         lines.append("前回比: **変更なし**")
 
@@ -718,6 +930,7 @@ def notify_discord_candidates(
     records: list[dict[str, Any]],
     criteria: CandidateCriteria,
     changes: CandidateChanges,
+    removed_reasons: dict[str, tuple[str, ...]],
 ) -> None:
     """Webhook設定時だけ累進配当候補の更新結果を通知する。"""
 
@@ -737,6 +950,7 @@ def notify_discord_candidates(
         records,
         criteria,
         changes,
+        removed_reasons,
     )
 
     send_discord_notification(
@@ -784,6 +998,10 @@ def main() -> None:
         records,
         previous_sheet_exists=previous_sheet_exists,
     )
+    removed_reasons = load_removed_candidate_reasons(
+        changes,
+        criteria,
+    )
     candidate_rows = build_candidate_rows(records)
 
     write_sheet(
@@ -804,6 +1022,7 @@ def main() -> None:
         records,
         criteria,
         changes,
+        removed_reasons,
     )
 
 
