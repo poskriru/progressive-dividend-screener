@@ -33,6 +33,23 @@ SECURITY_CODE_PATTERN = re.compile(
     r"^[0-9A-Z]{4}$"
 )
 
+SECURITY_CODE_IN_CELL_PATTERN = re.compile(
+    r"(?<![0-9A-Z])"
+    r"(?P<code>(?:[0-9]{4}|[0-9]{3}[A-Z]))"
+    r"(?![0-9A-Z])",
+    re.IGNORECASE,
+)
+
+DATE_IN_CELL_PATTERN = re.compile(
+    r"(?P<date>"
+    r"20[0-9]{2}"
+    r"[./-]"
+    r"[0-9]{2}"
+    r"[./-]"
+    r"[0-9]{2}"
+    r")"
+)
+
 RATIO_PATTERN = re.compile(
     r"(?P<before>\d+(?:\.\d+)?)"
     r"\s*:\s*"
@@ -263,3 +280,127 @@ def parse_action_description(
         return Decimal("1.0000000000"), "3"
 
     return None
+
+
+# ============================================================
+# JPX月次PDFの行解析
+# ============================================================
+
+def find_security_code_in_row(
+    row: list[Any],
+) -> str | None:
+    """PDF表の1行から上場銘柄コードを取得する。"""
+
+    normalized_cells = [
+        normalize_text(cell)
+        for cell in row
+    ]
+
+    # 通常はコード専用セルに4文字だけ入っている。
+    for cell in normalized_cells:
+        candidate = cell.upper()
+
+        if SECURITY_CODE_PATTERN.fullmatch(candidate):
+            return normalize_security_code(candidate)
+
+    # PDFの列結合により市場区分などと同じセルへ入った場合は、
+    # 日付セルを除外したうえで独立したコード表記を探す。
+    for cell in normalized_cells:
+        if DATE_IN_CELL_PATTERN.search(cell):
+            continue
+
+        match = SECURITY_CODE_IN_CELL_PATTERN.search(
+            cell.upper()
+        )
+
+        if match is not None:
+            return normalize_security_code(
+                match.group("code")
+            )
+
+    return None
+
+
+def find_effective_date_in_row(
+    row: list[Any],
+) -> date | None:
+    """PDF表の1行から最初の権利落ち日を取得する。"""
+
+    for cell in row:
+        normalized_cell = normalize_text(cell)
+        match = DATE_IN_CELL_PATTERN.search(
+            normalized_cell
+        )
+
+        if match is not None:
+            return parse_jpx_date(
+                match.group("date"),
+                field_name="権利落ち日",
+            )
+
+    return None
+
+
+def parse_pdf_table_row(
+    row: list[Any],
+) -> JpxCorporateAction | None:
+    """
+    pdfplumberが抽出した表の1行を企業行動へ変換する。
+
+    株式分割等を含まないヘッダー行や株主総会基準日行は無視する。
+    対象企業行動が見つかったのにコードまたは権利落ち日がない場合は、
+    読み飛ばさずエラーにして取得元ファイルをcompleteにしない。
+    """
+
+    if not isinstance(row, list):
+        raise RuntimeError(
+            "JPX PDFの表行がlistではありません。"
+        )
+
+    description = normalize_text(
+        " ".join(
+            normalize_text(cell)
+            for cell in row
+        )
+    )
+
+    parsed_action = parse_action_description(
+        description
+    )
+
+    if parsed_action is None:
+        return None
+
+    security_code = find_security_code_in_row(
+        row
+    )
+
+    if security_code is None:
+        raise RuntimeError(
+            "企業行動がある行から銘柄コードを"
+            "読み取れません。"
+            f"行={description}"
+        )
+
+    effective_date = find_effective_date_in_row(
+        row
+    )
+
+    if effective_date is None:
+        raise RuntimeError(
+            "企業行動がある行から権利落ち日を"
+            "読み取れません。"
+            f"行={description}"
+        )
+
+    adjustment_factor, ex_right_type = (
+        parsed_action
+    )
+
+    return JpxCorporateAction(
+        security_code=security_code,
+        effective_date=effective_date,
+        adjustment_factor=adjustment_factor,
+        ex_right_type=ex_right_type,
+        description=description,
+    )
