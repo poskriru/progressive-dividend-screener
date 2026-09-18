@@ -37,6 +37,7 @@ from update_edinet_financials import (
     JST,
     create_google_sheets_service,
     get_required_environment_variable,
+    send_discord_notification,
     write_sheet,
 )
 
@@ -408,6 +409,140 @@ def build_candidate_rows(
 
 
 # ============================================================
+# Discord通知
+# ============================================================
+
+def format_notification_metric(
+    value: Any,
+    *,
+    suffix: str = "",
+) -> str:
+    """Discord通知用に数値を小数第2位まで整形する。"""
+
+    if value is None:
+        return "-"
+
+    try:
+        number = Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return "-"
+
+    if not number.is_finite():
+        return "-"
+
+    normalized = f"{number:.2f}".rstrip("0").rstrip(".")
+    return f"{normalized}{suffix}"
+
+
+def build_discord_notification_description(
+    records: list[dict[str, Any]],
+    criteria: CandidateCriteria,
+    *,
+    display_limit: int = 10,
+) -> str:
+    """候補件数・抽出条件・上位銘柄をDiscord通知文にする。"""
+
+    if display_limit < 1:
+        raise ValueError(
+            "Discord通知の表示件数は1以上で指定してください。"
+        )
+
+    lines = [
+        f"抽出件数: **{len(records):,}件**",
+        f"抽出条件: {criteria.describe()}",
+        "",
+    ]
+
+    if not records:
+        lines.extend(
+            [
+                "**上位候補**",
+                "該当する銘柄はありませんでした。",
+            ]
+        )
+    else:
+        lines.append(
+            f"**上位{min(display_limit, len(records))}銘柄**"
+        )
+
+        for rank, record in enumerate(
+            records[:display_limit],
+            start=1,
+        ):
+            security_code = str(
+                record.get("security_code", "")
+            )
+            company_name = str(
+                record.get("company_name", "") or ""
+            )
+            dividend_yield = format_notification_metric(
+                record.get("dividend_yield_percent"),
+                suffix="%",
+            )
+            dividend_cagr = format_notification_metric(
+                record.get("dividend_cagr_5y_percent"),
+                suffix="%",
+            )
+            roe = format_notification_metric(
+                record.get("roe_percent"),
+                suffix="%",
+            )
+
+            lines.append(
+                f"{rank}. `{security_code}` {company_name} — "
+                f"利回り {dividend_yield} / "
+                f"5期CAGR {dividend_cagr} / "
+                f"ROE {roe}"
+            )
+
+    lines.extend(
+        [
+            "",
+            f"注意: {RAW_DIVIDEND_CAUTION}",
+            "詳細はGoogleスプレッドシートの"
+            f"「{CANDIDATE_SHEET_NAME}」を確認してください。",
+        ]
+    )
+
+    return "\n".join(lines)
+
+
+def notify_discord_candidates(
+    records: list[dict[str, Any]],
+    criteria: CandidateCriteria,
+) -> None:
+    """Webhook設定時だけ累進配当候補の更新結果を通知する。"""
+
+    webhook_url = os.getenv(
+        "DISCORD_WEBHOOK_URL",
+        "",
+    ).strip()
+
+    if not webhook_url:
+        print(
+            "DISCORD_WEBHOOK_URLが未設定のため、"
+            "累進配当候補のDiscord通知を省略します。"
+        )
+        return
+
+    description = build_discord_notification_description(
+        records,
+        criteria,
+    )
+
+    send_discord_notification(
+        webhook_url,
+        "累進配当候補を更新しました",
+        description,
+        success=True,
+    )
+
+    print(
+        "累進配当候補のDiscord通知処理を実行しました。"
+    )
+
+
+# ============================================================
 # メイン処理
 # ============================================================
 
@@ -443,6 +578,11 @@ def main() -> None:
         "累進配当候補の出力が完了しました。"
         f"シート: {CANDIDATE_SHEET_NAME}, "
         f"件数: {len(candidate_rows):,}"
+    )
+
+    notify_discord_candidates(
+        records,
+        criteria,
     )
 
 
