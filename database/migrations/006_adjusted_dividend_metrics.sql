@@ -113,9 +113,16 @@ adjusted_periods AS (
             WHEN coverage.range_is_complete
              AND coverage.unsupported_action_count = 0
              AND periods.annual_dividend_yen IS NOT NULL
-            THEN periods.annual_dividend_yen * COALESCE(
-                EXP(SUM(LN(actions.adjustment_factor))),
-                1::numeric
+            THEN ROUND(
+                periods.annual_dividend_yen * COALESCE(
+                    EXP(
+                        SUM(
+                            LN(actions.adjustment_factor)
+                        )
+                    ),
+                    1::numeric
+                ),
+                6
             )
             ELSE NULL::numeric
         END AS adjusted_annual_dividend_yen
