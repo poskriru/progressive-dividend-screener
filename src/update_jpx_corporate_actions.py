@@ -84,6 +84,7 @@ JPX_MONTHLY_PDF_PATH_PREFIX = (
 REQUEST_TIMEOUT_SECONDS = 120
 MAX_DOWNLOAD_RETRIES = 4
 MAX_PDF_CONTENT_BYTES = 25 * 1024 * 1024
+MAX_HTML_CONTENT_BYTES = 5 * 1024 * 1024
 
 HTTP_USER_AGENT = (
     "progressive-dividend-screener/"
@@ -1122,3 +1123,223 @@ def parse_monthly_pdf_sources(
             ),
         )
     )
+
+# ============================================================
+# JPX統計月報ページの取得
+# ============================================================
+
+def validate_html_content(content: bytes) -> str:
+    """取得内容がUTF-8のHTML文書であることを確認する。"""
+
+    if not isinstance(content, bytes):
+        raise RuntimeError(
+            "JPX統計月報ページの内容がbytesではありません。"
+        )
+
+    if not content:
+        raise RuntimeError(
+            "JPX統計月報ページの内容が空です。"
+        )
+
+    if len(content) > MAX_HTML_CONTENT_BYTES:
+        raise RuntimeError(
+            "JPX統計月報ページの実データサイズが"
+            "上限を超えています。"
+        )
+
+    try:
+        html = content.decode("utf-8-sig")
+    except UnicodeDecodeError as error:
+        raise RuntimeError(
+            "JPX統計月報ページをUTF-8として"
+            "読み取れません。"
+        ) from error
+
+    normalized_html = html.lstrip().lower()
+
+    if not (
+        normalized_html.startswith("<!doctype html")
+        or normalized_html.startswith("<html")
+    ):
+        raise RuntimeError(
+            "JPXから取得した内容がHTMLではありません。"
+        )
+
+    return html
+
+
+def download_monthly_page(
+    session: requests.Session,
+    page_url: str,
+) -> str:
+    """
+    JPX統計月報ページを安全に取得する。
+
+    一時的な通信障害、429、5xxだけを再試行する。
+    リダイレクト後のURLも許可範囲内か確認する。
+    ページはストリーミングで読み込み、上限超過時点で停止する。
+    """
+
+    if not isinstance(session, requests.Session):
+        raise RuntimeError(
+            "sessionはrequests.Sessionである必要があります。"
+        )
+
+    validated_url = validate_jpx_monthly_page_url(
+        page_url
+    )
+
+    last_error: Exception | None = None
+
+    for attempt in range(1, MAX_DOWNLOAD_RETRIES + 1):
+        response: requests.Response | None = None
+        retryable = False
+        wait_seconds = attempt * 5
+
+        try:
+            response = session.get(
+                validated_url,
+                headers={
+                    "User-Agent": HTTP_USER_AGENT,
+                    "Accept": (
+                        "text/html,"
+                        "application/xhtml+xml"
+                    ),
+                },
+                timeout=REQUEST_TIMEOUT_SECONDS,
+                allow_redirects=True,
+                stream=True,
+            )
+
+            response.raise_for_status()
+
+            final_url = validate_jpx_monthly_page_url(
+                response.url
+            )
+
+            if final_url != response.url:
+                raise RuntimeError(
+                    "JPX統計月報ページの最終URLを"
+                    "正規化できません。"
+                )
+
+            content_type = response.headers.get(
+                "Content-Type",
+                "",
+            )
+            media_type = content_type.split(
+                ";",
+                1,
+            )[0].strip().lower()
+
+            if media_type and media_type not in (
+                "text/html",
+                "application/xhtml+xml",
+            ):
+                raise RuntimeError(
+                    "JPX統計月報ページのContent-Typeが"
+                    "HTMLではありません。"
+                    f" Content-Type={content_type}"
+                )
+
+            content_length = response.headers.get(
+                "Content-Length"
+            )
+
+            if content_length is not None:
+                try:
+                    declared_size = int(content_length)
+                except ValueError as error:
+                    raise RuntimeError(
+                        "JPX統計月報ページの"
+                        "Content-Lengthが不正です。"
+                    ) from error
+
+                if declared_size < 0:
+                    raise RuntimeError(
+                        "JPX統計月報ページの"
+                        "Content-Lengthが負数です。"
+                    )
+
+                if declared_size > MAX_HTML_CONTENT_BYTES:
+                    raise RuntimeError(
+                        "JPX統計月報ページの"
+                        "Content-Lengthが上限を超えています。"
+                    )
+
+            content_buffer = bytearray()
+
+            for chunk in response.iter_content(
+                chunk_size=64 * 1024
+            ):
+                if not chunk:
+                    continue
+
+                content_buffer.extend(chunk)
+
+                if (
+                    len(content_buffer)
+                    > MAX_HTML_CONTENT_BYTES
+                ):
+                    raise RuntimeError(
+                        "JPX統計月報ページの"
+                        "実データサイズが上限を超えています。"
+                    )
+
+            html = validate_html_content(
+                bytes(content_buffer)
+            )
+
+            response.close()
+            return html
+
+        except requests.RequestException as error:
+            last_error = error
+
+            status_code = (
+                response.status_code
+                if response is not None
+                else None
+            )
+
+            retryable = (
+                response is None
+                or status_code == 429
+                or (
+                    status_code is not None
+                    and status_code >= 500
+                )
+            )
+
+            if response is not None:
+                wait_seconds = get_retry_wait_seconds(
+                    response,
+                    attempt,
+                )
+
+        except RuntimeError as error:
+            last_error = error
+            retryable = False
+
+        if response is not None:
+            response.close()
+
+        if (
+            not retryable
+            or attempt == MAX_DOWNLOAD_RETRIES
+        ):
+            break
+
+        time.sleep(wait_seconds)
+
+    if last_error is None:
+        raise RuntimeError(
+            "JPX統計月報ページの取得に失敗しました。"
+        )
+
+    raise RuntimeError(
+        "JPX統計月報ページの取得に失敗しました。"
+        f" URL={validated_url},"
+        f" エラー種別={type(last_error).__name__},"
+        f" エラー={last_error}"
+    ) from last_error
