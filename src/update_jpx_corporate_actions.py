@@ -85,6 +85,7 @@ REQUEST_TIMEOUT_SECONDS = 120
 MAX_DOWNLOAD_RETRIES = 4
 MAX_PDF_CONTENT_BYTES = 25 * 1024 * 1024
 MAX_HTML_CONTENT_BYTES = 5 * 1024 * 1024
+MAX_MONTHLY_PAGE_COUNT = 50
 
 HTTP_USER_AGENT = (
     "progressive-dividend-screener/"
@@ -1343,3 +1344,207 @@ def download_monthly_page(
         f" エラー種別={type(last_error).__name__},"
         f" エラー={last_error}"
     ) from last_error
+
+# ============================================================
+# JPX月次PDF取得対象の統合
+# ============================================================
+
+def parse_monthly_page_urls(
+    html: str,
+    *,
+    page_url: str,
+) -> tuple[str, ...]:
+    """月報トップページからバックナンバーページを抽出する。"""
+
+    validated_page_url = validate_jpx_monthly_page_url(
+        page_url
+    )
+
+    if not isinstance(html, str):
+        raise RuntimeError(
+            "JPX月報ページ一覧の内容がstrではありません。"
+        )
+
+    if not html.strip():
+        raise RuntimeError(
+            "JPX月報ページ一覧の内容が空です。"
+        )
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    page_urls: set[str] = {
+        validated_page_url,
+    }
+    archive_urls: set[str] = set()
+
+    for element in soup.find_all(
+        ["a", "option"]
+    ):
+        attribute_name = (
+            "href"
+            if element.name == "a"
+            else "value"
+        )
+        value = element.get(attribute_name)
+
+        if not isinstance(value, str):
+            continue
+
+        value = value.strip()
+
+        if not value:
+            continue
+
+        candidate_url = urljoin(
+            validated_page_url,
+            value,
+        )
+        candidate_path = urlparse(
+            candidate_url
+        ).path.lower()
+
+        if (
+            JPX_MONTHLY_PAGE_PATH_PATTERN.fullmatch(
+                candidate_path
+            )
+            is None
+        ):
+            continue
+
+        candidate_url = validate_jpx_monthly_page_url(
+            candidate_url
+        )
+        page_urls.add(candidate_url)
+
+        if "00-archives-" in candidate_path:
+            archive_urls.add(candidate_url)
+
+        if len(page_urls) > MAX_MONTHLY_PAGE_COUNT:
+            raise RuntimeError(
+                "JPX月報ページの件数が"
+                "安全上限を超えています。"
+            )
+
+    if (
+        validated_page_url == JPX_MONTHLY_INDEX_URL
+        and not archive_urls
+    ):
+        raise RuntimeError(
+            "JPX月報トップページから"
+            "バックナンバーページを取得できませんでした。"
+        )
+
+    return tuple(sorted(page_urls))
+
+
+def merge_monthly_pdf_sources(
+    source_groups: list[
+        tuple[JpxMonthlyPdfSource, ...]
+    ],
+) -> tuple[JpxMonthlyPdfSource, ...]:
+    """複数ページから取得した月次PDF情報を統合する。"""
+
+    sources_by_month: dict[
+        date,
+        JpxMonthlyPdfSource,
+    ] = {}
+
+    for sources in source_groups:
+        if not isinstance(sources, tuple):
+            raise RuntimeError(
+                "JPX月次PDF情報のグループが"
+                "tupleではありません。"
+            )
+
+        for source in sources:
+            if not isinstance(
+                source,
+                JpxMonthlyPdfSource,
+            ):
+                raise RuntimeError(
+                    "JPX月次PDF情報の型が不正です。"
+                )
+
+            existing = sources_by_month.get(
+                source.coverage_month
+            )
+
+            if existing is not None:
+                if (
+                    existing.source_url
+                    != source.source_url
+                ):
+                    raise RuntimeError(
+                        "複数のJPX月報ページに"
+                        "同一対象年月の異なるPDFがあります。"
+                        f" month="
+                        f"{source.coverage_month:%Y-%m},"
+                        f" first={existing.source_url},"
+                        f" second={source.source_url}"
+                    )
+
+                continue
+
+            sources_by_month[
+                source.coverage_month
+            ] = source
+
+    if not sources_by_month:
+        raise RuntimeError(
+            "JPX月報ページ全体から"
+            "企業行動PDFを取得できませんでした。"
+        )
+
+    return tuple(
+        sorted(
+            sources_by_month.values(),
+            key=lambda source: (
+                source.coverage_month,
+                source.source_url,
+            ),
+        )
+    )
+
+
+def discover_monthly_pdf_sources(
+    session: requests.Session,
+) -> tuple[JpxMonthlyPdfSource, ...]:
+    """JPX月報とバックナンバーから全PDF情報を取得する。"""
+
+    if not isinstance(session, requests.Session):
+        raise RuntimeError(
+            "sessionはrequests.Sessionである必要があります。"
+        )
+
+    index_html = download_monthly_page(
+        session,
+        JPX_MONTHLY_INDEX_URL,
+    )
+
+    page_urls = parse_monthly_page_urls(
+        index_html,
+        page_url=JPX_MONTHLY_INDEX_URL,
+    )
+
+    source_groups: list[
+        tuple[JpxMonthlyPdfSource, ...]
+    ] = []
+
+    for page_url in page_urls:
+        if page_url == JPX_MONTHLY_INDEX_URL:
+            page_html = index_html
+        else:
+            page_html = download_monthly_page(
+                session,
+                page_url,
+            )
+
+        sources = parse_monthly_pdf_sources(
+            page_html,
+            page_url=page_url,
+        )
+        source_groups.append(sources)
+
+    return merge_monthly_pdf_sources(
+        source_groups
+    )
