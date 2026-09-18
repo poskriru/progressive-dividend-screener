@@ -715,11 +715,8 @@ def load_progressive_dividend_candidates(
         FROM screener.company_screener_with_dividends
         WHERE annual_financial_id IS NOT NULL
           AND close_price IS NOT NULL
-          AND CASE
-                WHEN is_adjustment_coverage_complete IS TRUE
-                THEN is_progressive_dividend_5y_adjusted
-                ELSE is_progressive_dividend_5y_raw
-              END IS TRUE
+          AND is_adjustment_coverage_complete IS TRUE
+          AND is_progressive_dividend_5y_adjusted IS TRUE
           AND dividend_yield_percent >= %s
           AND payout_ratio_percent BETWEEN 0 AND %s
           AND per_ratio > 0
