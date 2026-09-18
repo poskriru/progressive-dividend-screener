@@ -16,7 +16,7 @@ jobs:
   syntax-check:
     name: Python構文チェック
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
 
     steps:
       # ======================================================
@@ -32,12 +32,26 @@ jobs:
         uses: actions/setup-python@v7
         with:
           python-version: "3.12"
+          cache: pip
 
       # ======================================================
-      # src配下のPython構文チェック
-      #
-      # 外部API、データベース、Google Sheetsには接続しない。
+      # 依存パッケージ
+      # ======================================================
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # ======================================================
+      # Python構文チェック
       # ======================================================
       - name: Compile Python source files
         run: |
-          python -m compileall -q src
+          python -m compileall -q src tests
+
+      # ======================================================
+      # 単体テスト
+      # ======================================================
+      - name: Run unit tests
+        run: |
+          python -m unittest discover -s tests -v

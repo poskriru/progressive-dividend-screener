@@ -46,11 +46,14 @@ EXPECTED_TABLES = {
     "daily_prices",
     "edinet_documents",
     "annual_financials",
+    "corporate_actions",
+    "jquants_adjustment_sync_status",
 }
 
 EXPECTED_VIEWS = {
     "company_screener_base",
     "company_dividend_metrics",
+    "company_dividend_metrics_adjusted",
     "company_screener_with_dividends",
 }
 

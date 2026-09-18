@@ -11,6 +11,8 @@
 - EDINET APIから有価証券報告書・財務情報・配当実績を取得
 - PER、PBR、ROE、配当利回り、配当性向などを計算
 - 直近5期の非減配実績から累進配当候補を判定
+- J-Quants V2の`AdjFactor`で過去配当を現在株式ベースへ補正
+- raw判定とadjusted判定を併存し、補正範囲充足時だけadjustedを採用
 - PostgreSQLへ保存し、Googleスプレッドシートへ一括出力
 - 条件に合う銘柄を「累進配当候補」シートへランキング出力
 - 発行済株式数の大幅変動を「株式分割等確認対象」へ出力
@@ -50,8 +52,54 @@ Discord通知へ表示します。除外銘柄には、累進配当判定、配�
 初期値を使用してシートを作成します。シート作成後は、シート上の値を
 正本として使用します。不明な項目、重複、空欄、不正な数値がある場合は
 候補更新を停止し、誤った条件での出力を防ぎます。
-年間配当履歴は株式分割・株式併合による過年度調整前の値なので、
-候補シートの判定注記と一次資料を確認してください。
+候補抽出では、J-Quants補正範囲が完全で、adjusted判定がTRUEの銘柄だけを
+採用します。未取得・取得範囲不足・取得失敗・未対応アクションがある銘柄は、
+誤判定を防ぐため候補から除外し、除外理由に
+「株式分割等補正データ不足」を表示します。raw値とraw判定は監査・比較用として
+保持しますが、補正範囲不足時の候補判定には使用しません。候補シートでは
+raw判定、adjusted判定、補正係数、補正状態、両方の配当履歴を確認できます。
+
+## 株式分割・株式併合による過去配当補正
+
+J-Quants API V2の`/v2/equities/bars/daily`から、日付単位で`AdjFactor`と
+`ExRT`を取得します。認証には`JQUANTS_API_KEY`を`x-api-key`ヘッダーで
+使用します。取得結果は以下へ保存します。
+
+- `screener.corporate_actions`: 調整係数が1以外、または`ExRT`がある日
+- `screener.jquants_adjustment_sync_status`: 銘柄別の要求・取得保証範囲
+- `screener.company_dividend_metrics_adjusted`: 調整済み直近5期指標
+
+補正では、対象決算期より後かつ基準日以前の係数をすべて掛け合わせます。
+1:2分割の`0.5`は旧配当へ掛け、複数回の分割・併合は係数の積を使います。
+権利落ち日当日の係数はその日より前の履歴へ効かせるため、SQLの境界は
+`effective_date > fiscal_period_end`です。
+
+自動補正対象は`ExRT=1`（分割・無償割当）と`ExRT=2`（併合）だけです。
+`ExRT=3`（ライツイシュー）や種別不明の非1係数は保存しますが、機械的な
+配当補正をせず`unsupported_corporate_action`とします。取得範囲が直近5期の
+最古決算日以前から当日まで達していない場合は`adjustment_data_incomplete`とし、
+adjusted判定はNULLになります。raw値・raw判定は変更も上書きもしません。
+
+初回バックフィルと日次更新は、DBマイグレーション適用後に実行します。
+
+```bash
+python src/run_database_migrations.py
+python src/update_jquants_corporate_actions.py
+python src/export_database_indicators.py
+```
+
+初回取得開始日は全銘柄の直近5期で必要な最古日を自動算出します。取得可能な
+期間がプランで不足する場合はcompleteにならず、adjusted判定を採用しません。
+検証や再取得では`JQUANTS_ADJUSTMENT_FROM`と`JQUANTS_ADJUSTMENT_TO`で期間を
+明示できます。`JQUANTS_REQUESTS_PER_MINUTE`は契約プランの上限以下に設定し、
+初期値はFreeプラン相当の5です。初回バックフィル後は取得済み終端の翌日から
+増分取得します。
+
+GitHub Actionsの「J-Quants株式分割・併合情報の更新」ワークフローから
+手動実行できます。Repository Secretの`DATABASE_URL`と`JQUANTS_API_KEY`を使用し、
+取得開始日、取得終了日、1分あたりのリクエスト数を実行時に指定します。
+初回バックフィルは取得期間を年単位に分割して実行してください。
+認証情報をコードやログへ埋め込まないでください。
 
 ## 株式分割等の確認対象
 
@@ -87,7 +135,6 @@ PDF本文は自動ダウンロードせず、公開一覧のメタデータと�
 
 ## 今後追加する機能
 
-- 株式分割・株式併合を考慮した過年度配当の補正
 - TDnet・会社IRのPDF本文による累進配当方針の確定
 - Discordから条件指定して銘柄検索
 
@@ -110,12 +157,14 @@ PDF本文は自動ダウンロードせず、公開一覧のメタデータと�
 - `GOOGLE_SPREADSHEET_ID`
 - `DISCORD_WEBHOOK_URL`
 
-EDINETとJ-QuantsのAPIキーは、今後の処理で使用します。
+EDINET APIキーは財務更新、J-Quants APIキーは株式分割・併合による
+過去配当補正で使用します。
 
 ## データ出典
 
 - 日本取引所グループ
 - 金融庁EDINET
+- J-Quants API V2
 - 各上場会社の公式IR情報
 
 ## 注意事項

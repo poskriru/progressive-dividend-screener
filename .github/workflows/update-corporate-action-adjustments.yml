@@ -1,0 +1,116 @@
+name: J-Quants株式分割・併合情報の更新
+
+# ============================================================
+# 実行条件
+# ============================================================
+
+on:
+  # 初回バックフィルを安全に分割実行できるよう、
+  # 現段階では手動実行だけにする。
+  workflow_dispatch:
+    inputs:
+      from_date:
+        description: "取得開始日（YYYY-MM-DD）"
+        required: true
+        default: "2021-01-01"
+
+      to_date:
+        description: "取得終了日（YYYY-MM-DD）"
+        required: true
+        default: "2021-12-31"
+
+      requests_per_minute:
+        description: "J-Quants APIの1分あたりリクエスト数"
+        required: true
+        default: "5"
+
+
+# ============================================================
+# 権限
+# ============================================================
+
+permissions:
+  contents: read
+
+
+# ============================================================
+# 同時実行制御
+# ============================================================
+
+concurrency:
+  group: update-corporate-action-adjustments
+  cancel-in-progress: false
+
+
+# ============================================================
+# ジョブ
+# ============================================================
+
+jobs:
+  update-corporate-action-adjustments:
+    name: J-Quants調整係数更新
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    env:
+      TZ: Asia/Tokyo
+
+      DATABASE_URL: >-
+        ${{ secrets.DATABASE_URL }}
+
+      JQUANTS_API_KEY: >-
+        ${{ secrets.JQUANTS_API_KEY }}
+
+      JQUANTS_ADJUSTMENT_FROM: >-
+        ${{ github.event.inputs.from_date }}
+
+      JQUANTS_ADJUSTMENT_TO: >-
+        ${{ github.event.inputs.to_date }}
+
+      JQUANTS_REQUESTS_PER_MINUTE: >-
+        ${{ github.event.inputs.requests_per_minute }}
+
+    steps:
+      # ======================================================
+      # リポジトリ取得
+      # ======================================================
+
+      - name: リポジトリを取得
+        uses: actions/checkout@v7
+
+      # ======================================================
+      # Pythonセットアップ
+      # ======================================================
+
+      - name: Pythonをセットアップ
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # ======================================================
+      # 依存パッケージ
+      # ======================================================
+
+      - name: Pythonパッケージをインストール
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # ======================================================
+      # PostgreSQLマイグレーション
+      # ======================================================
+
+      - name: PostgreSQLマイグレーションを実行
+        run: |
+          python src/run_database_migrations.py
+
+      # ======================================================
+      # J-Quants調整係数取得
+      # ======================================================
+
+      - name: 株式分割・株式併合の調整係数を更新
+        run: |
+          echo "取得期間: ${JQUANTS_ADJUSTMENT_FROM} ～ ${JQUANTS_ADJUSTMENT_TO}"
+          echo "リクエスト上限: ${JQUANTS_REQUESTS_PER_MINUTE} req/min"
+          python src/update_jquants_corporate_actions.py
