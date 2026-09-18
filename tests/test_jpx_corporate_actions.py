@@ -20,11 +20,15 @@ sys.path.insert(
 )
 
 from update_jpx_corporate_actions import (  # noqa: E402
+    JpxCorporateAction,
     extract_ratio,
+    find_effective_date_in_row,
+    find_security_code_in_row,
     normalize_security_code,
     normalize_text,
     parse_action_description,
     parse_jpx_date,
+    parse_pdf_table_row,
 )
 
 
@@ -309,6 +313,201 @@ class JpxOtherActionParsingTest(unittest.TestCase):
             parse_action_description("")
         )
 
+# ============================================================
+# JPX月次PDFの行解析
+# ============================================================
+
+class JpxPdfTableRowParsingTest(unittest.TestCase):
+    """JPX月次PDFから抽出された表行を検証する。"""
+
+    def test_split_row_is_converted_to_action(
+        self,
+    ) -> None:
+        row = [
+            "プライム",
+            "9301",
+            "三菱倉庫",
+            "Mitsubishi Logistics Corporation",
+            "2024.10.30",
+            "2024.10.31",
+            "1:2 株式分割",
+        ]
+
+        action = parse_pdf_table_row(row)
+
+        self.assertEqual(
+            action,
+            JpxCorporateAction(
+                security_code="9301",
+                effective_date=date(2024, 10, 30),
+                adjustment_factor=Decimal(
+                    "0.5000000000"
+                ),
+                ex_right_type="1",
+                description=(
+                    "プライム 9301 三菱倉庫 "
+                    "Mitsubishi Logistics Corporation "
+                    "2024.10.30 2024.10.31 "
+                    "1:2 株式分割"
+                ),
+            ),
+        )
+
+    def test_old_pdf_reverse_split_row_is_converted(
+        self,
+    ) -> None:
+        row = [
+            "ＪＡＳＤＡＱスタンダード 7901",
+            "マツモト",
+            "MATSUMOTO INC.",
+            "2017.10.27",
+            "2017.10.31",
+            "10:1 株式併合",
+        ]
+
+        action = parse_pdf_table_row(row)
+
+        self.assertIsNotNone(action)
+        self.assertEqual(
+            action.security_code,
+            "7901",
+        )
+        self.assertEqual(
+            action.effective_date,
+            date(2017, 10, 27),
+        )
+        self.assertEqual(
+            action.adjustment_factor,
+            Decimal("10.0000000000"),
+        )
+        self.assertEqual(
+            action.ex_right_type,
+            "2",
+        )
+
+    def test_alphanumeric_code_is_found_in_merged_cell(
+        self,
+    ) -> None:
+        row = [
+            "TOKYO PRO Market 312A",
+            "シンコーホールディングス",
+            "2026.07.30",
+            "2026.07.31",
+            "1:2 株式分割",
+        ]
+
+        self.assertEqual(
+            find_security_code_in_row(row),
+            "312A",
+        )
+
+    def test_first_date_is_used_as_effective_date(
+        self,
+    ) -> None:
+        row = [
+            "9301",
+            "三菱倉庫",
+            "2024.10.30",
+            "2024.10.31",
+            "1:2 株式分割",
+        ]
+
+        self.assertEqual(
+            find_effective_date_in_row(row),
+            date(2024, 10, 30),
+        )
+
+    def test_general_meeting_row_is_ignored(
+        self,
+    ) -> None:
+        row = [
+            "プライム",
+            "4933",
+            "Ｉ－ｎｅ",
+            "2024.10.02",
+            "2024.10.03",
+            "臨時株主総会の議決権の行使",
+        ]
+
+        self.assertIsNone(
+            parse_pdf_table_row(row)
+        )
+
+    def test_etf_beneficiary_split_row_is_ignored(
+        self,
+    ) -> None:
+        row = [
+            "ETF",
+            "2237",
+            "iFreeETF",
+            "2026.07.03",
+            "2026.07.06",
+            "1:50 受益権分割",
+        ]
+
+        self.assertIsNone(
+            parse_pdf_table_row(row)
+        )
+
+    def test_reit_investment_unit_split_is_ignored(
+        self,
+    ) -> None:
+        row = [
+            "不動産投信",
+            "3471",
+            "三井不動産ロジスティクスパーク",
+            "2024.10.30",
+            "2024.10.31",
+            "1:4 投資口分割",
+        ]
+
+        self.assertIsNone(
+            parse_pdf_table_row(row)
+        )
+
+    def test_action_without_security_code_is_rejected(
+        self,
+    ) -> None:
+        row = [
+            "スタンダード",
+            "銘柄名",
+            "2024.10.30",
+            "2024.10.31",
+            "1:2 株式分割",
+        ]
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "銘柄コード",
+        ):
+            parse_pdf_table_row(row)
+
+    def test_action_without_effective_date_is_rejected(
+        self,
+    ) -> None:
+        row = [
+            "スタンダード",
+            "7901",
+            "マツモト",
+            "10:1 株式併合",
+        ]
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "権利落ち日",
+        ):
+            parse_pdf_table_row(row)
+
+    def test_non_list_row_is_rejected(
+        self,
+    ) -> None:
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "listではありません",
+        ):
+            parse_pdf_table_row(
+                ("9301", "1:2 株式分割")
+            )
 
 # ============================================================
 # エントリーポイント
