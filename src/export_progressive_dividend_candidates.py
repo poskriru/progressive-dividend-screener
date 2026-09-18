@@ -28,6 +28,7 @@ from database import create_database_connection
 
 from export_database_indicators import (
     format_dividend_history,
+    to_sheet_boolean,
     to_sheet_date,
     to_sheet_integer,
     to_sheet_number,
@@ -119,6 +120,15 @@ CANDIDATE_HEADERS = [
     "5期最古年間配当（円）",
     "5期配当履歴",
     "EDINET閲覧URL",
+    "TDnet方針候補",
+    "TDnet最新方針開示日",
+    "TDnet最新方針表題",
+    "TDnet方針PDF URL",
+    "TDnet減配警戒",
+    "TDnet最新配当開示日",
+    "TDnet最新配当分類",
+    "TDnet最新配当表題",
+    "TDnet最新配当PDF URL",
     "判定注記",
 ]
 
@@ -777,6 +787,40 @@ def build_candidate_rows(
                 record.get("annual_dividends_yen_5y"),
             ),
             str(record.get("financial_source_url", "") or ""),
+            to_sheet_boolean(
+                record.get("tdnet_policy_candidate")
+            ),
+            str(
+                record.get("tdnet_policy_date", "")
+                or ""
+            ),
+            str(
+                record.get("tdnet_policy_title", "")
+                or ""
+            ),
+            str(
+                record.get("tdnet_policy_url", "")
+                or ""
+            ),
+            to_sheet_boolean(
+                record.get("tdnet_dividend_warning")
+            ),
+            str(
+                record.get("tdnet_dividend_date", "")
+                or ""
+            ),
+            str(
+                record.get("tdnet_dividend_category", "")
+                or ""
+            ),
+            str(
+                record.get("tdnet_dividend_title", "")
+                or ""
+            ),
+            str(
+                record.get("tdnet_dividend_url", "")
+                or ""
+            ),
             RAW_DIVIDEND_CAUTION,
         ]
 
@@ -1462,9 +1506,23 @@ def build_discord_notification_description(
                 record.get("roe_percent"),
                 suffix="%",
             )
+            markers: list[str] = []
+
+            if record.get("tdnet_policy_candidate"):
+                markers.append("TDnet方針候補")
+
+            if record.get("tdnet_dividend_warning"):
+                markers.append("TDnet減配警戒")
+
+            marker_text = (
+                " [" + " / ".join(markers) + "]"
+                if markers
+                else ""
+            )
 
             lines.append(
-                f"{rank}. `{security_code}` {company_name} — "
+                f"{rank}. `{security_code}` {company_name}"
+                f"{marker_text} — "
                 f"利回り {dividend_yield} / "
                 f"5期CAGR {dividend_cagr} / "
                 f"ROE {roe}"
@@ -1522,6 +1580,298 @@ def notify_discord_candidates(
 
 
 # ============================================================
+# TDnet方針候補との連携
+# ============================================================
+
+def refresh_tdnet_disclosures_non_fatal(
+    sheets_service,
+    spreadsheet_id: str,
+) -> None:
+    """TDnet更新を実行し、失敗時は候補更新を継続する。"""
+
+    try:
+        from update_tdnet_dividend_disclosures import (
+            update_tdnet_dividend_disclosures,
+        )
+
+        update_tdnet_dividend_disclosures(
+            sheets_service,
+            spreadsheet_id,
+        )
+    except Exception as error:
+        print(
+            "TDnet配当関連開示の更新に失敗しました。"
+            f"{type(error).__name__}: {error}",
+            file=sys.stderr,
+        )
+        traceback.print_exc()
+
+        webhook_url = os.getenv(
+            "DISCORD_WEBHOOK_URL",
+            "",
+        ).strip()
+
+        if webhook_url:
+            send_discord_notification(
+                webhook_url,
+                "TDnet配当関連開示の更新に失敗しました",
+                "財務・株式指標・累進配当候補の更新は"
+                "継続します。TDnet公開一覧の取得だけが"
+                "失敗したため、GitHub Actionsのログを"
+                "確認してください。",
+                success=False,
+            )
+
+
+def load_tdnet_policy_candidates(
+    sheets_service,
+    spreadsheet_id: str,
+) -> dict[str, dict[str, str]]:
+    """累進配当方針候補シートを証券コード別に読み込む。"""
+
+    policy_sheet_name = "累進配当方針候補"
+    metadata = get_spreadsheet_metadata(
+        sheets_service,
+        spreadsheet_id,
+    )
+    sheet_exists = any(
+        sheet.get("properties", {}).get("title")
+        == policy_sheet_name
+        for sheet in metadata.get("sheets", [])
+    )
+
+    if not sheet_exists:
+        return {}
+
+    values = read_sheet(
+        sheets_service,
+        spreadsheet_id,
+        policy_sheet_name,
+    )
+
+    if len(values) < 2:
+        return {}
+
+    headers = [
+        str(value).strip()
+        for value in values[0]
+    ]
+    required_headers = [
+        "証券コード",
+        "最新開示日",
+        "最新表題",
+        "PDF URL",
+    ]
+    missing_headers = [
+        header
+        for header in required_headers
+        if header not in headers
+    ]
+
+    if missing_headers:
+        raise RuntimeError(
+            "累進配当方針候補シートに必要な列がありません。"
+            f"不足列: {missing_headers}"
+        )
+
+    code_index = headers.index("証券コード")
+    date_index = headers.index("最新開示日")
+    title_index = headers.index("最新表題")
+    url_index = headers.index("PDF URL")
+    policies: dict[str, dict[str, str]] = {}
+
+    for row in values[1:]:
+        if len(row) <= code_index:
+            continue
+
+        security_code = str(
+            row[code_index]
+        ).strip().upper()
+
+        if not security_code:
+            continue
+
+        policies[security_code] = {
+            "date": (
+                str(row[date_index]).strip()
+                if len(row) > date_index
+                else ""
+            ),
+            "title": (
+                str(row[title_index]).strip()
+                if len(row) > title_index
+                else ""
+            ),
+            "url": (
+                str(row[url_index]).strip()
+                if len(row) > url_index
+                else ""
+            ),
+        }
+
+    return policies
+
+
+def load_tdnet_dividend_alerts(
+    sheets_service,
+    spreadsheet_id: str,
+) -> dict[str, dict[str, str]]:
+    """TDnet配当開示から銘柄ごとの最新開示を読み込む。"""
+
+    disclosure_sheet_name = "TDnet配当開示"
+    metadata = get_spreadsheet_metadata(
+        sheets_service,
+        spreadsheet_id,
+    )
+    sheet_exists = any(
+        sheet.get("properties", {}).get("title")
+        == disclosure_sheet_name
+        for sheet in metadata.get("sheets", [])
+    )
+
+    if not sheet_exists:
+        return {}
+
+    values = read_sheet(
+        sheets_service,
+        spreadsheet_id,
+        disclosure_sheet_name,
+    )
+
+    if len(values) < 2:
+        return {}
+
+    headers = [
+        str(value).strip()
+        for value in values[0]
+    ]
+    required_headers = [
+        "公開日",
+        "公開時刻",
+        "証券コード",
+        "表題",
+        "分類",
+        "PDF URL",
+    ]
+    missing_headers = [
+        header
+        for header in required_headers
+        if header not in headers
+    ]
+
+    if missing_headers:
+        raise RuntimeError(
+            "TDnet配当開示シートに必要な列がありません。"
+            f"不足列: {missing_headers}"
+        )
+
+    indexes = {
+        header: headers.index(header)
+        for header in required_headers
+    }
+    alerts: dict[str, dict[str, str]] = {}
+
+    for row in values[1:]:
+        code_index = indexes["証券コード"]
+
+        if len(row) <= code_index:
+            continue
+
+        security_code = str(
+            row[code_index]
+        ).strip().upper()
+
+        if not security_code:
+            continue
+
+        def cell(header: str) -> str:
+            index = indexes[header]
+            return (
+                str(row[index]).strip()
+                if len(row) > index
+                else ""
+            )
+
+        candidate = {
+            "date": cell("公開日"),
+            "time": cell("公開時刻"),
+            "title": cell("表題"),
+            "category": cell("分類"),
+            "url": cell("PDF URL"),
+        }
+        current = alerts.get(security_code)
+
+        if current is None or (
+            candidate["date"],
+            candidate["time"],
+        ) > (
+            current["date"],
+            current["time"],
+        ):
+            alerts[security_code] = candidate
+
+    return alerts
+
+
+def enrich_candidate_records_with_tdnet_policy(
+    records: list[dict[str, Any]],
+    policies: dict[str, dict[str, str]],
+    alerts: dict[str, dict[str, str]],
+) -> None:
+    """候補レコードへTDnet方針候補・配当警戒情報を付加する。"""
+
+    for record in records:
+        security_code = str(
+            record.get("security_code", "")
+        ).strip().upper()
+        policy = policies.get(security_code)
+        record["tdnet_policy_candidate"] = bool(policy)
+        record["tdnet_policy_date"] = (
+            policy.get("date", "")
+            if policy
+            else ""
+        )
+        record["tdnet_policy_title"] = (
+            policy.get("title", "")
+            if policy
+            else ""
+        )
+        record["tdnet_policy_url"] = (
+            policy.get("url", "")
+            if policy
+            else ""
+        )
+
+        alert = alerts.get(security_code)
+        alert_category = (
+            alert.get("category", "")
+            if alert
+            else ""
+        )
+        record["tdnet_dividend_warning"] = (
+            alert_category == "減配・無配"
+        )
+        record["tdnet_dividend_date"] = (
+            alert.get("date", "")
+            if alert
+            else ""
+        )
+        record["tdnet_dividend_category"] = (
+            alert_category
+        )
+        record["tdnet_dividend_title"] = (
+            alert.get("title", "")
+            if alert
+            else ""
+        )
+        record["tdnet_dividend_url"] = (
+            alert.get("url", "")
+            if alert
+            else ""
+        )
+
+
+# ============================================================
 # メイン処理
 # ============================================================
 
@@ -1541,6 +1891,18 @@ def main() -> None:
         sheets_service,
         spreadsheet_id,
     )
+    refresh_tdnet_disclosures_non_fatal(
+        sheets_service,
+        spreadsheet_id,
+    )
+    tdnet_policies = load_tdnet_policy_candidates(
+        sheets_service,
+        spreadsheet_id,
+    )
+    tdnet_alerts = load_tdnet_dividend_alerts(
+        sheets_service,
+        spreadsheet_id,
+    )
 
     print(f"累進配当候補の抽出条件: {criteria.describe()}")
     print(f"判定上の注意: {RAW_DIVIDEND_CAUTION}")
@@ -1553,6 +1915,11 @@ def main() -> None:
         spreadsheet_id,
     )
     records = load_progressive_dividend_candidates(criteria)
+    enrich_candidate_records_with_tdnet_policy(
+        records,
+        tdnet_policies,
+        tdnet_alerts,
+    )
     changes = calculate_candidate_changes(
         previous_snapshot,
         records,
