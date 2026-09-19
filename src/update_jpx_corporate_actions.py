@@ -326,6 +326,10 @@ def extract_ratio(
     return before, after
 
 
+# ============================================================
+# JPX企業行動表記
+# ============================================================
+
 def parse_action_description(
     value: Any,
 ) -> tuple[Decimal, str] | None:
@@ -355,6 +359,18 @@ def parse_action_description(
         return None
 
     ratio = extract_ratio(description)
+
+    # pdfplumberでは、JPX月次PDFの列見出しが
+    # 「区 分 コード 分割比率（割当率）」という
+    # 1行として抽出される場合がある。
+    # 比率を含まない列見出しを株式分割と誤認しない。
+    if (
+        ratio is None
+        and "コード" in description
+        and "分割比率" in description
+        and "割当率" in description
+    ):
+        return None
 
     if "株式併合" in description:
         if ratio is None:
