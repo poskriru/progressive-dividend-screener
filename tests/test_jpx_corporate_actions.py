@@ -777,6 +777,174 @@ class JpxPdfMarketScopeParsingTest(unittest.TestCase):
         )
 
 # ============================================================
+# JPX月次PDFの非先頭市場区分セル
+# ============================================================
+
+class JpxPdfNonLeadingMarketScopeParsingTest(
+    unittest.TestCase
+):
+    """先頭以外のセルへ抽出された市場区分を検証する。"""
+
+    def parse_rows(
+        self,
+        rows: list[list[object]],
+    ) -> ParsedJpxPdf:
+        """指定した表行を持つモックPDFを解析する。"""
+
+        page = MagicMock()
+        page.extract_text.return_value = (
+            "17 新株落・権利落等一覧"
+        )
+        page.extract_tables.return_value = [
+            rows
+        ]
+
+        pdf = MagicMock()
+        pdf.pages = [page]
+        pdf.__enter__.return_value = pdf
+        pdf.__exit__.return_value = False
+
+        with patch(
+            "update_jpx_corporate_actions.pdfplumber.open",
+            return_value=pdf,
+        ):
+            return parse_monthly_pdf(
+                b"%PDF-non-leading-market-scope"
+            )
+
+    def test_tokyo_pro_market_in_non_leading_cell_is_ignored(
+        self,
+    ) -> None:
+        rows = [
+            [
+                "区 分",
+                "TOKYO PRO Market",
+                "コード",
+                "銘柄名",
+            ],
+            [
+                None,
+                "329A",
+                "ジールアソシエイツ",
+                "2026.03.10",
+                "2026.03.11",
+                "1:10 株式分割",
+            ],
+            [
+                None,
+                "5840",
+                "日本総険",
+                "2026.06.11",
+                "2026.06.12",
+                "1:2 株式分割",
+            ],
+            [
+                None,
+                "7132",
+                "フローバル",
+                "2026.06.29",
+                "2026.06.30",
+                "1:3 株式分割",
+            ],
+        ]
+
+        result = self.parse_rows(rows)
+
+        self.assertEqual(
+            result.actions,
+            (),
+        )
+
+    def test_included_market_in_non_leading_cell_resumes_parsing(
+        self,
+    ) -> None:
+        rows = [
+            [
+                "区 分",
+                "TOKYO PRO Market",
+                "コード",
+                "銘柄名",
+            ],
+            [
+                None,
+                "329A",
+                "ジールアソシエイツ",
+                "2026.03.10",
+                "2026.03.11",
+                "1:10 株式分割",
+            ],
+            [
+                "区 分",
+                "グロース Growth",
+                "コード",
+                "銘柄名",
+            ],
+            [
+                None,
+                "7066",
+                "ピアズ",
+                "2026.06.29",
+                "2026.06.30",
+                "1:3 株式分割",
+            ],
+        ]
+
+        result = self.parse_rows(rows)
+
+        self.assertEqual(
+            tuple(
+                action.security_code
+                for action in result.actions
+            ),
+            ("7066",),
+        )
+
+    def test_split_tokyo_pro_market_label_is_ignored(
+        self,
+    ) -> None:
+        rows = [
+            [
+                "区 分",
+                "TOKYO",
+                "PRO",
+                "Market",
+                "コード",
+                "銘柄名",
+            ],
+            [
+                None,
+                "329A",
+                "ジールアソシエイツ",
+                "2026.03.10",
+                "2026.03.11",
+                "1:10 株式分割",
+            ],
+            [
+                None,
+                "5840",
+                "日本総険",
+                "2026.06.11",
+                "2026.06.12",
+                "1:2 株式分割",
+            ],
+            [
+                None,
+                "7132",
+                "フローバル",
+                "2026.06.29",
+                "2026.06.30",
+                "1:3 株式分割",
+            ],
+        ]
+
+        result = self.parse_rows(rows)
+
+        self.assertEqual(
+            result.actions,
+            (),
+        )
+
+# ============================================================
 # JPX月次PDF全体の解析
 # ============================================================
 
