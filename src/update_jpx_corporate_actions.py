@@ -491,6 +491,111 @@ def find_effective_date_in_row(
 
     return None
 
+PDF_MARKET_SCOPE_INCLUDED = "included"
+PDF_MARKET_SCOPE_EXCLUDED = "excluded"
+
+PDF_INCLUDED_MARKET_SECTION_MARKERS = (
+    "プライム",
+    "prime",
+    "スタンダード",
+    "standard",
+    "グロース",
+    "growth",
+)
+
+PDF_EXCLUDED_MARKET_SECTION_MARKERS = (
+    "tokyopromarket",
+    "etf",
+    "reit",
+    "インフラファンド",
+)
+
+
+def classify_pdf_market_section(
+    row: list[Any],
+) -> str | None:
+    """
+    PDF表行の先頭セルから市場・商品区分を判定する。
+
+    pdfplumberでは市場区分の結合セルが最初の行にだけ入り、
+    同じ区分の後続行では空欄になることがある。そのため、
+    呼び出し側で返り値を保持して後続行へ適用する。
+    """
+
+    if not isinstance(row, list):
+        raise RuntimeError(
+            "JPX PDFの表行がlistではありません。"
+        )
+
+    if not row:
+        return None
+
+    first_cell = normalize_text(row[0])
+
+    if not first_cell:
+        return None
+
+    compact_first_cell = re.sub(
+        r"\s+",
+        "",
+        first_cell,
+    ).casefold()
+
+    if any(
+        marker in compact_first_cell
+        for marker
+        in PDF_EXCLUDED_MARKET_SECTION_MARKERS
+    ):
+        return PDF_MARKET_SCOPE_EXCLUDED
+
+    if any(
+        marker in compact_first_cell
+        for marker
+        in PDF_INCLUDED_MARKET_SECTION_MARKERS
+    ):
+        return PDF_MARKET_SCOPE_INCLUDED
+
+    return None
+
+
+def is_foreign_stock_pdf_row(
+    row: list[Any],
+) -> bool:
+    """JPX月次PDFの外国株行かどうかを判定する。"""
+
+    if not isinstance(row, list):
+        raise RuntimeError(
+            "JPX PDFの表行がlistではありません。"
+        )
+
+    description = normalize_text(
+        " ".join(
+            normalize_text(cell)
+            for cell in row
+        )
+    ).casefold()
+
+    return (
+        "外国株" in description
+        or "<foreign>" in description
+        or "＜foreign＞" in description
+    )
+
+
+def is_explicitly_excluded_pdf_row(
+    row: list[Any],
+) -> bool:
+    """行自体に対象外区分が明記されているか判定する。"""
+
+    market_scope = classify_pdf_market_section(
+        row
+    )
+
+    return (
+        market_scope == PDF_MARKET_SCOPE_EXCLUDED
+        or is_foreign_stock_pdf_row(row)
+    )
+
 
 def parse_pdf_table_row(
     row: list[Any],
@@ -499,6 +604,8 @@ def parse_pdf_table_row(
     pdfplumberが抽出した表の1行を企業行動へ変換する。
 
     株式分割等を含まないヘッダー行や株主総会基準日行は無視する。
+    TOKYO PRO Market、ETF、REIT、インフラファンドおよび
+    外国株は銘柄マスターの対象外であるため解析対象から除外する。
     対象企業行動が見つかったのにコードまたは権利落ち日がない場合は、
     読み飛ばさずエラーにして取得元ファイルをcompleteにしない。
     """
@@ -507,6 +614,9 @@ def parse_pdf_table_row(
         raise RuntimeError(
             "JPX PDFの表行がlistではありません。"
         )
+
+    if is_explicitly_excluded_pdf_row(row):
+        return None
 
     description = normalize_text(
         " ".join(
@@ -557,7 +667,6 @@ def parse_pdf_table_row(
     )
 
 
-
 # ============================================================
 # JPX月次PDF全体の解析
 # ============================================================
@@ -592,6 +701,9 @@ def parse_monthly_pdf(
     タイトル、ページ数、表数、行数を確認し、表を1件も
     抽出できない場合はcompleteとして扱わない。
     同一銘柄・権利落ち日の内容が矛盾する場合も失敗させる。
+
+    pdfplumberで結合された市場区分セルが後続行で空欄に
+    なることがあるため、直前に確認した市場区分を保持する。
     """
 
     validate_pdf_content(content)
@@ -604,6 +716,8 @@ def parse_monthly_pdf(
     table_count = 0
     row_count = 0
     extracted_text_parts: list[str] = []
+
+    current_market_scope: str | None = None
 
     actions_by_key: dict[
         tuple[str, date],
@@ -645,6 +759,27 @@ def parse_monthly_pdf(
 
                     for row in table:
                         row_count += 1
+
+                        market_scope = (
+                            classify_pdf_market_section(
+                                row
+                            )
+                        )
+
+                        if market_scope is not None:
+                            current_market_scope = (
+                                market_scope
+                            )
+
+                        if (
+                            current_market_scope
+                            == PDF_MARKET_SCOPE_EXCLUDED
+                        ):
+                            continue
+
+                        if is_foreign_stock_pdf_row(row):
+                            continue
+
                         action = parse_pdf_table_row(
                             row
                         )
@@ -729,7 +864,6 @@ def parse_monthly_pdf(
         row_count=row_count,
         actions=actions,
     )
-
 
 
 # ============================================================
