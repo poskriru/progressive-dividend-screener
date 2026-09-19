@@ -5,21 +5,43 @@ name: JPX株式分割・併合情報の更新
 # ============================================================
 
 on:
-  # 初回バックフィルを安全に分割実行できるよう、
-  # 現段階では手動実行だけにする。
+  # ----------------------------------------------------------
+  # 定期実行
+  #
+  # JPX月次統計は原則として翌月21日前後に公開されるため、
+  # 毎月22日に前月分を取得する。
+  #
+  # 26日は、JPX側の公開遅延や一時的な通信障害に備えた
+  # 再試行として同じ前月分を取得する。
+  #
+  # GitHub Actionsのscheduleはデフォルトブランチ上の
+  # ワークフローだけが実行対象となる。
+  # ----------------------------------------------------------
+
+  schedule:
+    - cron: "17 6 22,26 * *"
+      timezone: "Asia/Tokyo"
+
+  # ----------------------------------------------------------
+  # 手動実行
+  #
+  # 両方を空欄にすると前月分を取得する。
+  # 期間を指定すると従来どおりバックフィルできる。
+  # ----------------------------------------------------------
+
   workflow_dispatch:
     inputs:
       coverage_start:
-        description: "取得開始月（YYYY-MM）"
-        required: true
+        description: "取得開始月（YYYY-MM）。空欄の場合は前月"
+        required: false
         type: string
-        default: "2022-01"
+        default: ""
 
       coverage_end:
-        description: "取得終了月（YYYY-MM）"
-        required: true
+        description: "取得終了月（YYYY-MM）。空欄の場合は前月"
+        required: false
         type: string
-        default: "2022-01"
+        default: ""
 
 
 # ============================================================
@@ -55,12 +77,6 @@ jobs:
       DATABASE_URL: >-
         ${{ secrets.DATABASE_URL }}
 
-      JPX_COVERAGE_START: >-
-        ${{ github.event.inputs.coverage_start }}
-
-      JPX_COVERAGE_END: >-
-        ${{ github.event.inputs.coverage_end }}
-
     steps:
       # ======================================================
       # リポジトリ取得
@@ -68,6 +84,90 @@ jobs:
 
       - name: リポジトリを取得
         uses: actions/checkout@v7
+
+      # ======================================================
+      # 取得期間の決定
+      # ======================================================
+
+      - name: 取得期間を決定
+        shell: bash
+        env:
+          MANUAL_COVERAGE_START: >-
+            ${{ github.event.inputs.coverage_start }}
+          MANUAL_COVERAGE_END: >-
+            ${{ github.event.inputs.coverage_end }}
+        run: |
+          set -euo pipefail
+
+          coverage_start="${MANUAL_COVERAGE_START:-}"
+          coverage_end="${MANUAL_COVERAGE_END:-}"
+
+          if [[ "${GITHUB_EVENT_NAME}" == "schedule" ]]; then
+              current_month="$(date '+%Y-%m-01')"
+              target_month="$(
+                  date \
+                      -d "${current_month} -1 month" \
+                      '+%Y-%m'
+              )"
+
+              coverage_start="${target_month}"
+              coverage_end="${target_month}"
+              execution_mode="schedule"
+
+          elif [[ -z "${coverage_start}" && -z "${coverage_end}" ]]; then
+              current_month="$(date '+%Y-%m-01')"
+              target_month="$(
+                  date \
+                      -d "${current_month} -1 month" \
+                      '+%Y-%m'
+              )"
+
+              coverage_start="${target_month}"
+              coverage_end="${target_month}"
+              execution_mode="manual_previous_month"
+
+          elif [[ -z "${coverage_start}" || -z "${coverage_end}" ]]; then
+              echo "::error::coverage_startとcoverage_endは、両方入力するか両方空欄にしてください。"
+              exit 1
+
+          else
+              execution_mode="manual_range"
+          fi
+
+          month_pattern='^[0-9]{4}-(0[1-9]|1[0-2])$'
+
+          if [[ ! "${coverage_start}" =~ ${month_pattern} ]]; then
+              echo "::error::coverage_startの形式が不正です: ${coverage_start}"
+              exit 1
+          fi
+
+          if [[ ! "${coverage_end}" =~ ${month_pattern} ]]; then
+              echo "::error::coverage_endの形式が不正です: ${coverage_end}"
+              exit 1
+          fi
+
+          if [[ "${coverage_start}" > "${coverage_end}" ]]; then
+              echo "::error::coverage_startはcoverage_end以前にしてください。"
+              exit 1
+          fi
+
+          {
+              echo "JPX_COVERAGE_START=${coverage_start}"
+              echo "JPX_COVERAGE_END=${coverage_end}"
+              echo "JPX_EXECUTION_MODE=${execution_mode}"
+          } >> "${GITHUB_ENV}"
+
+          {
+              echo "### JPX月次企業行動の取得条件"
+              echo ""
+              echo "- 実行方式: \`${execution_mode}\`"
+              echo "- 取得開始月: \`${coverage_start}\`"
+              echo "- 取得終了月: \`${coverage_end}\`"
+              echo "- タイムゾーン: \`Asia/Tokyo\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+          echo "実行方式: ${execution_mode}"
+          echo "取得期間: ${coverage_start} ～ ${coverage_end}"
 
       # ======================================================
       # Pythonセットアップ
@@ -117,5 +217,6 @@ jobs:
 
       - name: JPX株式分割・株式併合情報を更新
         run: |
+          echo "実行方式: ${JPX_EXECUTION_MODE}"
           echo "取得期間: ${JPX_COVERAGE_START} ～ ${JPX_COVERAGE_END}"
           python src/update_jpx_corporate_actions.py
