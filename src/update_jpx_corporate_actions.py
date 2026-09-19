@@ -546,13 +546,15 @@ def classify_pdf_market_section(
     PDF表行の全セルから市場・商品区分を判定する。
 
     pdfplumberでは、市場区分の結合セルが先頭セル以外へ
-    抽出される場合がある。そのため、TOKYO PRO Market、
-    ETF、REIT、インフラファンドは全セルを検査する。
+    抽出されたり、TOKYO、PRO、Marketのように複数セルへ
+    分割されたりする場合がある。
+
+    対象外区分は、全セルを空白なしで結合した文字列から
+    判定する。
 
     プライム、スタンダード、グロースは、従来形式との
     後方互換性のため先頭セルの複合表記を許可し、
-    先頭セル以外では市場区分ラベルとの完全一致だけを
-    採用する。
+    先頭セル以外では市場区分ラベルとの完全一致を採用する。
     """
 
     if not isinstance(row, list):
@@ -572,12 +574,12 @@ def classify_pdf_market_section(
     if not compact_cells:
         return None
 
-    # TOKYO PRO Marketなどの対象外区分は、
-    # PDFレイアウトによって先頭以外のセルへ入るため
-    # 全セルを検査する。
+    # 市場名が複数セルへ分割されても判定できるよう、
+    # 行全体を空白なしで連結する。
+    compact_row = "".join(compact_cells)
+
     if any(
-        marker in compact_cell
-        for compact_cell in compact_cells
+        marker in compact_row
         for marker in PDF_EXCLUDED_MARKET_SECTION_MARKERS
     ):
         return PDF_MARKET_SCOPE_EXCLUDED
@@ -602,7 +604,6 @@ def classify_pdf_market_section(
         return PDF_MARKET_SCOPE_INCLUDED
 
     return None
-
 
 def is_foreign_stock_pdf_row(
     row: list[Any],
