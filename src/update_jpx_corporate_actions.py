@@ -1,10 +1,13 @@
 """
-JPXが無料公開する月次PDFおよび日次Excelから、
-株式分割・株式併合等を読み取る。
+JPXが無料公開する月次PDFから、
+株式分割・株式併合等を取得・解析してPostgreSQLへ保存する。
 
-このファイルでは、JPXの比率表記を既存の
+JPXの比率表記を既存の
 screener.corporate_actionsで使用する調整係数へ変換する。
-取得・PDF解析・DB保存処理は後続の修正で追加する。
+
+対象期間は環境変数で月単位に指定する。
+月ごとに取得・解析・保存し、一部の月が失敗しても
+後続月の処理を継続する。
 """
 
 from __future__ import annotations
@@ -14,7 +17,9 @@ from __future__ import annotations
 # ============================================================
 
 import hashlib
+import os
 import re
+import sys
 import time
 from dataclasses import dataclass
 from datetime import (
@@ -23,7 +28,11 @@ from datetime import (
     timedelta,
     timezone,
 )
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from decimal import (
+    Decimal,
+    InvalidOperation,
+    ROUND_HALF_UP,
+)
 from io import BytesIO
 from typing import Any
 from urllib.parse import urljoin, urlparse
@@ -50,6 +59,19 @@ JPX_SOURCE = "JPX"
 
 DATABASE_APPLICATION_NAME = (
     "progressive-dividend-jpx-actions"
+)
+
+JPX_COVERAGE_START_ENVIRONMENT_VARIABLE = (
+    "JPX_COVERAGE_START"
+)
+
+JPX_COVERAGE_END_ENVIRONMENT_VARIABLE = (
+    "JPX_COVERAGE_END"
+)
+
+COVERAGE_MONTH_PATTERN = re.compile(
+    r"^(?P<year>[0-9]{4})-"
+    r"(?P<month>0[1-9]|1[0-2])$"
 )
 
 FACTOR_QUANTUM = Decimal("0.0000000001")
@@ -2558,3 +2580,273 @@ def save_complete_jpx_coverage(
         f"PDF={len(source_rows):,}件, "
         f"企業行動={len(action_rows):,}件"
     )
+
+# ============================================================
+# JPX月次企業行動更新の実行
+# ============================================================
+
+def get_required_environment_variable(
+    name: str,
+) -> str:
+    """必須環境変数を取得する。"""
+
+    if not isinstance(name, str):
+        raise RuntimeError(
+            "環境変数名がstrではありません。"
+        )
+
+    normalized_name = name.strip()
+
+    if not normalized_name:
+        raise RuntimeError(
+            "環境変数名が空です。"
+        )
+
+    value = os.getenv(
+        normalized_name,
+        "",
+    ).strip()
+
+    if not value:
+        raise RuntimeError(
+            "必須環境変数が設定されていません。"
+            f" name={normalized_name}"
+        )
+
+    return value
+
+
+def parse_coverage_month(
+    value: Any,
+    *,
+    field_name: str,
+) -> date:
+    """YYYY-MM形式の対象月を月初の日付へ変換する。"""
+
+    if not isinstance(value, str):
+        raise RuntimeError(
+            f"{field_name}がstrではありません。"
+        )
+
+    normalized_value = value.strip()
+
+    match = COVERAGE_MONTH_PATTERN.fullmatch(
+        normalized_value
+    )
+
+    if match is None:
+        raise RuntimeError(
+            f"{field_name}はYYYY-MM形式で"
+            "指定してください。"
+            f" value={normalized_value!r}"
+        )
+
+    year = int(
+        match.group("year")
+    )
+    month = int(
+        match.group("month")
+    )
+
+    try:
+        return date(
+            year,
+            month,
+            1,
+        )
+    except ValueError as error:
+        raise RuntimeError(
+            f"{field_name}が有効な年月ではありません。"
+            f" value={normalized_value!r}"
+        ) from error
+
+
+def get_requested_coverage_period(
+) -> tuple[date, date]:
+    """環境変数からJPXの取得対象期間を決定する。"""
+
+    coverage_start_text = (
+        get_required_environment_variable(
+            JPX_COVERAGE_START_ENVIRONMENT_VARIABLE
+        )
+    )
+    coverage_end_text = (
+        get_required_environment_variable(
+            JPX_COVERAGE_END_ENVIRONMENT_VARIABLE
+        )
+    )
+
+    coverage_start = parse_coverage_month(
+        coverage_start_text,
+        field_name="JPX取得開始月",
+    )
+    coverage_end = parse_coverage_month(
+        coverage_end_text,
+        field_name="JPX取得終了月",
+    )
+
+    # 開始・終了の順序と安全上限を共通処理で検証する。
+    build_month_range(
+        coverage_start,
+        coverage_end,
+    )
+
+    return (
+        coverage_start,
+        coverage_end,
+    )
+
+
+def create_jpx_http_session(
+) -> requests.Session:
+    """JPX取得用のHTTPセッションを作成する。"""
+
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": HTTP_USER_AGENT,
+    })
+
+    return session
+
+
+def run_jpx_monthly_update(
+) -> tuple[int, int]:
+    """指定期間のJPX月次PDFを月単位で更新する。"""
+
+    (
+        coverage_start,
+        coverage_end,
+    ) = get_requested_coverage_period()
+
+    print(
+        "JPX月次企業行動の更新を開始します。"
+        f" 期間={coverage_start:%Y-%m}"
+        f"〜{coverage_end:%Y-%m}"
+    )
+
+    successful_month_count = 0
+    failed_month_count = 0
+
+    with create_jpx_http_session() as session:
+        discovered_sources = (
+            discover_monthly_pdf_sources(
+                session
+            )
+        )
+
+        selected_sources = (
+            select_monthly_pdf_sources(
+                discovered_sources,
+                coverage_start=coverage_start,
+                coverage_end=coverage_end,
+            )
+        )
+
+        for source in selected_sources:
+            coverage_month = (
+                source.coverage_month
+            )
+
+            try:
+                parsed_coverage = (
+                    download_and_parse_monthly_sources(
+                        session,
+                        (
+                            source,
+                        ),
+                    )
+                )
+
+                save_complete_jpx_coverage(
+                    parsed_coverage
+                )
+            except Exception as error:
+                failed_month_count += 1
+
+                print(
+                    "JPX月次企業行動の更新に"
+                    "失敗しました。"
+                    f" 対象月={coverage_month:%Y-%m},"
+                    f" エラー種別="
+                    f"{type(error).__name__}",
+                    file=sys.stderr,
+                )
+
+                try:
+                    save_failed_monthly_source(
+                        source,
+                        error,
+                    )
+                except Exception as save_error:
+                    print(
+                        "JPX月次PDFの失敗状態を"
+                        "保存できませんでした。"
+                        f" 対象月="
+                        f"{coverage_month:%Y-%m},"
+                        f" エラー種別="
+                        f"{type(save_error).__name__}",
+                        file=sys.stderr,
+                    )
+
+                continue
+
+            successful_month_count += 1
+
+            print(
+                "JPX月次企業行動の更新が"
+                "完了しました。"
+                f" 対象月={coverage_month:%Y-%m},"
+                f" 企業行動="
+                f"{len(parsed_coverage.actions):,}件"
+            )
+
+    print(
+        "JPX月次企業行動の更新処理が"
+        "終了しました。"
+        f" 期間={coverage_start:%Y-%m}"
+        f"〜{coverage_end:%Y-%m},"
+        f" 成功月={successful_month_count:,}件,"
+        f" 失敗月={failed_month_count:,}件"
+    )
+
+    return (
+        successful_month_count,
+        failed_month_count,
+    )
+
+
+def main() -> None:
+    """JPX月次企業行動更新のエントリーポイント。"""
+
+    try:
+        (
+            successful_month_count,
+            failed_month_count,
+        ) = run_jpx_monthly_update()
+    except Exception as error:
+        print(
+            "JPX月次企業行動の更新処理を"
+            "開始または完了できませんでした。"
+            f" エラー種別={type(error).__name__}",
+            file=sys.stderr,
+        )
+
+        raise SystemExit(1) from error
+
+    if failed_month_count > 0:
+        print(
+            "一部の対象月で更新に失敗しました。"
+            f" 成功月={successful_month_count:,}件,"
+            f" 失敗月={failed_month_count:,}件",
+            file=sys.stderr,
+        )
+
+        raise SystemExit(1)
+
+
+# ============================================================
+# エントリーポイント
+# ============================================================
+
+if __name__ == "__main__":
+    main()
