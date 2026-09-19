@@ -145,7 +145,24 @@ class CandidateDecisionTest(unittest.TestCase):
 
 
 class MigrationIntegrityTest(unittest.TestCase):
-    def test_applied_migration_hashes_are_unchanged(self) -> None:
+    @staticmethod
+    def read_migration(
+        filename: str,
+    ) -> str:
+        """指定したマイグレーションをUTF-8で読み込む。"""
+
+        return (
+            PROJECT_ROOT
+            / "database"
+            / "migrations"
+            / filename
+        ).read_text(
+            encoding="utf-8"
+        )
+
+    def test_applied_migration_hashes_are_unchanged(
+        self,
+    ) -> None:
         expected = {
             "003_progressive_dividend_metrics.sql": (
                 "f839f85cf4b5d6de1670a8b054ad4fd66c7b665c74ba15b68098e81a668912bf"
@@ -154,20 +171,166 @@ class MigrationIntegrityTest(unittest.TestCase):
                 "dfc2291343c78c5c25c20031c133fdcf60645fd5aee4b53bcfe709485036d988"
             ),
         }
-        for filename, expected_hash in expected.items():
-            content = (PROJECT_ROOT / "database" / "migrations" / filename).read_bytes()
-            self.assertEqual(hashlib.sha256(content).hexdigest(), expected_hash)
 
-    def test_adjusted_sql_uses_strict_ex_date_boundary(self) -> None:
-        sql = (
-            PROJECT_ROOT
-            / "database"
-            / "migrations"
-            / "006_adjusted_dividend_metrics.sql"
-        ).read_text(encoding="utf-8")
-        self.assertIn("actions.effective_date > periods.fiscal_period_end", sql)
-        self.assertIn("actions.ex_right_type IN ('1', '2')", sql)
-        self.assertIn("'adjustment_data_incomplete'", sql)
+        for filename, expected_hash in expected.items():
+            with self.subTest(
+                filename=filename
+            ):
+                content = (
+                    PROJECT_ROOT
+                    / "database"
+                    / "migrations"
+                    / filename
+                ).read_bytes()
+
+                self.assertEqual(
+                    hashlib.sha256(
+                        content
+                    ).hexdigest(),
+                    expected_hash,
+                )
+
+    def test_adjusted_sql_uses_strict_ex_date_boundary(
+        self,
+    ) -> None:
+        sql = self.read_migration(
+            "006_adjusted_dividend_metrics.sql"
+        )
+
+        self.assertIn(
+            (
+                "actions.effective_date "
+                "> periods.fiscal_period_end"
+            ),
+            sql,
+        )
+        self.assertIn(
+            (
+                "actions.ex_right_type "
+                "IN ('1', '2')"
+            ),
+            sql,
+        )
+        self.assertIn(
+            "'adjustment_data_incomplete'",
+            sql,
+        )
+
+    def test_source_isolation_recreates_adjusted_view(
+        self,
+    ) -> None:
+        sql = self.read_migration(
+            "009_isolate_corporate_action_sources.sql"
+        )
+
+        self.assertIn(
+            (
+                "CREATE OR REPLACE VIEW "
+                "screener."
+                "company_dividend_metrics_adjusted AS"
+            ),
+            sql,
+        )
+
+    def test_source_isolation_uses_only_jquants_actions(
+        self,
+    ) -> None:
+        sql = self.read_migration(
+            "009_isolate_corporate_action_sources.sql"
+        )
+
+        source_predicate = (
+            "actions.source = 'J-Quants V2'"
+        )
+
+        self.assertEqual(
+            sql.count(
+                source_predicate
+            ),
+            2,
+        )
+
+    def test_source_isolation_filters_coverage_actions(
+        self,
+    ) -> None:
+        sql = self.read_migration(
+            "009_isolate_corporate_action_sources.sql"
+        )
+
+        coverage_start = sql.index(
+            "coverage AS ("
+        )
+        adjusted_periods_start = sql.index(
+            "adjusted_periods AS ("
+        )
+
+        coverage_sql = sql[
+            coverage_start:
+            adjusted_periods_start
+        ]
+
+        self.assertIn(
+            "actions.source = 'J-Quants V2'",
+            coverage_sql,
+        )
+
+    def test_source_isolation_filters_adjustment_actions(
+        self,
+    ) -> None:
+        sql = self.read_migration(
+            "009_isolate_corporate_action_sources.sql"
+        )
+
+        adjusted_periods_start = sql.index(
+            "adjusted_periods AS ("
+        )
+        period_comparisons_start = sql.index(
+            "period_comparisons AS ("
+        )
+
+        adjusted_periods_sql = sql[
+            adjusted_periods_start:
+            period_comparisons_start
+        ]
+
+        self.assertIn(
+            "actions.source = 'J-Quants V2'",
+            adjusted_periods_sql,
+        )
+        self.assertIn(
+            "actions.ex_right_type IN ('1', '2')",
+            adjusted_periods_sql,
+        )
+
+    def test_source_isolation_preserves_output_view(
+        self,
+    ) -> None:
+        sql = self.read_migration(
+            "009_isolate_corporate_action_sources.sql"
+        )
+
+        self.assertIn(
+            (
+                "CREATE OR REPLACE VIEW "
+                "screener."
+                "company_screener_with_dividends AS"
+            ),
+            sql,
+        )
+        self.assertIn(
+            (
+                "adjusted."
+                "is_adjustment_coverage_complete"
+            ),
+            sql,
+        )
+        self.assertIn(
+            (
+                "adjusted."
+                "adjusted_annual_dividends_yen_5y"
+            ),
+            sql,
+        )
 
 
 if __name__ == "__main__":
