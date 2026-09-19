@@ -491,6 +491,10 @@ def find_effective_date_in_row(
 
     return None
 
+# ============================================================
+# JPX月次PDFの対象市場
+# ============================================================
+
 PDF_MARKET_SCOPE_INCLUDED = "included"
 PDF_MARKET_SCOPE_EXCLUDED = "excluded"
 
@@ -503,6 +507,18 @@ PDF_INCLUDED_MARKET_SECTION_MARKERS = (
     "growth",
 )
 
+PDF_INCLUDED_MARKET_SECTION_LABELS = (
+    "プライム",
+    "prime",
+    "プライムprime",
+    "スタンダード",
+    "standard",
+    "スタンダードstandard",
+    "グロース",
+    "growth",
+    "グロースgrowth",
+)
+
 PDF_EXCLUDED_MARKET_SECTION_MARKERS = (
     "tokyopromarket",
     "etf",
@@ -511,15 +527,32 @@ PDF_EXCLUDED_MARKET_SECTION_MARKERS = (
 )
 
 
+def compact_pdf_market_cell(
+    value: Any,
+) -> str:
+    """市場区分判定用にPDFセル内の空白を除去する。"""
+
+    return re.sub(
+        r"\s+",
+        "",
+        normalize_text(value),
+    ).casefold()
+
+
 def classify_pdf_market_section(
     row: list[Any],
 ) -> str | None:
     """
-    PDF表行の先頭セルから市場・商品区分を判定する。
+    PDF表行の全セルから市場・商品区分を判定する。
 
-    pdfplumberでは市場区分の結合セルが最初の行にだけ入り、
-    同じ区分の後続行では空欄になることがある。そのため、
-    呼び出し側で返り値を保持して後続行へ適用する。
+    pdfplumberでは、市場区分の結合セルが先頭セル以外へ
+    抽出される場合がある。そのため、TOKYO PRO Market、
+    ETF、REIT、インフラファンドは全セルを検査する。
+
+    プライム、スタンダード、グロースは、従来形式との
+    後方互換性のため先頭セルの複合表記を許可し、
+    先頭セル以外では市場区分ラベルとの完全一致だけを
+    採用する。
     """
 
     if not isinstance(row, list):
@@ -530,28 +563,41 @@ def classify_pdf_market_section(
     if not row:
         return None
 
-    first_cell = normalize_text(row[0])
+    compact_cells = tuple(
+        compact_pdf_market_cell(cell)
+        for cell in row
+        if normalize_text(cell)
+    )
 
-    if not first_cell:
+    if not compact_cells:
         return None
 
-    compact_first_cell = re.sub(
-        r"\s+",
-        "",
-        first_cell,
-    ).casefold()
-
+    # TOKYO PRO Marketなどの対象外区分は、
+    # PDFレイアウトによって先頭以外のセルへ入るため
+    # 全セルを検査する。
     if any(
-        marker in compact_first_cell
-        for marker
-        in PDF_EXCLUDED_MARKET_SECTION_MARKERS
+        marker in compact_cell
+        for compact_cell in compact_cells
+        for marker in PDF_EXCLUDED_MARKET_SECTION_MARKERS
     ):
         return PDF_MARKET_SCOPE_EXCLUDED
 
+    first_cell = compact_pdf_market_cell(row[0])
+
+    # 従来のPDFでは市場区分と銘柄コードが
+    # 先頭セルへ結合される場合がある。
     if any(
-        marker in compact_first_cell
-        for marker
-        in PDF_INCLUDED_MARKET_SECTION_MARKERS
+        marker in first_cell
+        for marker in PDF_INCLUDED_MARKET_SECTION_MARKERS
+    ):
+        return PDF_MARKET_SCOPE_INCLUDED
+
+    # 新しいPDFでは市場区分ラベルが先頭以外の
+    # 独立セルへ抽出される場合がある。
+    if any(
+        compact_cell
+        in PDF_INCLUDED_MARKET_SECTION_LABELS
+        for compact_cell in compact_cells[1:]
     ):
         return PDF_MARKET_SCOPE_INCLUDED
 
