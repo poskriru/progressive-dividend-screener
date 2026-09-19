@@ -544,6 +544,44 @@ class JpxPdfTableRowParsingTest(unittest.TestCase):
             )
 
 # ============================================================
+# JPX月次PDFのヘッダー行
+# ============================================================
+
+class JpxPdfHeaderRowParsingTest(unittest.TestCase):
+    """実際のJPX PDFから抽出されるヘッダー行を検証する。"""
+
+    def test_split_ratio_column_header_is_ignored(
+        self,
+    ) -> None:
+        row = [
+            "区 分",
+            "コード",
+            "分割比率（割当率）",
+        ]
+
+        self.assertIsNone(
+            parse_pdf_table_row(row)
+        )
+
+    def test_malformed_stock_split_is_still_rejected(
+        self,
+    ) -> None:
+        row = [
+            "プライム",
+            "9301",
+            "三菱倉庫",
+            "2024.10.30",
+            "2024.10.31",
+            "株式分割",
+        ]
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "株式分割の比率",
+        ):
+            parse_pdf_table_row(row)
+
+# ============================================================
 # JPX月次PDF全体の解析
 # ============================================================
 
