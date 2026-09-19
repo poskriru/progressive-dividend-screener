@@ -1471,12 +1471,16 @@ class JpxMonthlyPdfSourceParsingTest(unittest.TestCase):
     def test_external_pdf_url_is_rejected(
         self,
     ) -> None:
-        html = """
+        external_pdf_url = (
+            "https://example.com/"
+            "markets/statistics-equities/monthly/"
+            "example-att/18_kenri2203.pdf"
+        )
+
+        html = f"""
         <html>
           <body>
-            <a href="https://example.com/
-            markets/statistics-equities/monthly/
-            example-att/18_kenri2203.pdf">
+            <a href="{external_pdf_url}">
               外部PDF
             </a>
           </body>
@@ -2135,13 +2139,17 @@ class JpxMonthlyArchiveDiscoveryTest(unittest.TestCase):
     def test_external_archive_page_is_rejected(
         self,
     ) -> None:
-        html = """
+        external_archive_url = (
+            "https://example.com/"
+            "markets/statistics-equities/monthly/"
+            "00-archives-04.html"
+        )
+
+        html = f"""
         <!doctype html>
         <html>
           <body>
-            <a href="https://example.com/
-            markets/statistics-equities/monthly/
-            00-archives-04.html">
+            <a href="{external_archive_url}">
               外部ページ
             </a>
           </body>
