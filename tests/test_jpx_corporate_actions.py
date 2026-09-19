@@ -23,6 +23,7 @@ sys.path.insert(
 )
 
 from update_jpx_corporate_actions import (  # noqa: E402
+    HTTP_USER_AGENT,
     MAX_HTML_CONTENT_BYTES,
     JpxCorporateAction,
     JpxMonthlyPdfSource,
@@ -30,6 +31,7 @@ from update_jpx_corporate_actions import (  # noqa: E402
     ParsedJpxMonthlySource,
     ParsedJpxPdf,
     build_month_range,
+    create_jpx_http_session,
     discover_monthly_pdf_sources,
     download_and_parse_monthly_sources,
     download_monthly_page,
@@ -39,17 +41,22 @@ from update_jpx_corporate_actions import (  # noqa: E402
     find_effective_date_in_row,
     find_security_code_in_row,
     get_month_end,
+    get_requested_coverage_period,
+    get_required_environment_variable,
+    main,
     merge_monthly_pdf_sources,
     next_month,
     normalize_month,
     normalize_security_code,
     normalize_text,
     parse_action_description,
+    parse_coverage_month,
     parse_jpx_date,
     parse_monthly_page_urls,
     parse_monthly_pdf,
     parse_monthly_pdf_sources,
     parse_pdf_table_row,
+    run_jpx_monthly_update,
     save_complete_jpx_coverage,
     save_failed_monthly_source,
     select_monthly_pdf_sources,
@@ -3968,6 +3975,575 @@ class JpxDatabasePersistenceTest(unittest.TestCase):
                 )
 
         connection_mock.assert_not_called()
+
+# ============================================================
+# JPX更新エントリーポイントテスト
+# ============================================================
+
+class JpxUpdateEntrypointTest(unittest.TestCase):
+    """JPX月次企業行動更新の実行制御を検証する。"""
+
+    @staticmethod
+    def create_source(
+        year: int,
+        month: int,
+    ) -> JpxMonthlyPdfSource:
+        """指定月のJPX月次PDF情報を作成する。"""
+
+        return JpxMonthlyPdfSource(
+            coverage_month=date(
+                year,
+                month,
+                1,
+            ),
+            source_url=(
+                "https://www.jpx.co.jp/"
+                "markets/statistics-equities/monthly/"
+                "example-att/"
+                f"17_kenri{year % 100:02d}{month:02d}.pdf"
+            ),
+        )
+
+    @staticmethod
+    def create_result(
+        source: JpxMonthlyPdfSource,
+    ) -> ParsedJpxCoverage:
+        """指定月の空の解析結果を作成する。"""
+
+        return ParsedJpxCoverage(
+            coverage_start=source.coverage_month,
+            coverage_end=source.coverage_month,
+            source_files=(),
+            actions=(),
+        )
+
+    @staticmethod
+    def create_session_mock() -> MagicMock:
+        """コンテキスト管理対応のHTTPセッションを作成する。"""
+
+        session = MagicMock(
+            spec=requests.Session
+        )
+        session.__enter__.return_value = session
+        session.__exit__.return_value = False
+
+        return session
+
+    def test_required_environment_variable_is_trimmed(
+        self,
+    ) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "JPX_TEST_VALUE": "  value  ",
+            },
+            clear=True,
+        ):
+            self.assertEqual(
+                get_required_environment_variable(
+                    "JPX_TEST_VALUE"
+                ),
+                "value",
+            )
+
+    def test_missing_environment_variable_is_rejected(
+        self,
+    ) -> None:
+        with patch.dict(
+            "os.environ",
+            {},
+            clear=True,
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "必須環境変数",
+            ):
+                get_required_environment_variable(
+                    "JPX_MISSING_VALUE"
+                )
+
+    def test_valid_coverage_month_is_parsed(
+        self,
+    ) -> None:
+        self.assertEqual(
+            parse_coverage_month(
+                "2024-02",
+                field_name="取得対象月",
+            ),
+            date(2024, 2, 1),
+        )
+
+    def test_invalid_coverage_month_is_rejected(
+        self,
+    ) -> None:
+        invalid_values = (
+            "2024-2",
+            "24-02",
+            "2024/02",
+            "2024-00",
+            "2024-13",
+            "2024-02-01",
+            "",
+            None,
+        )
+
+        for invalid_value in invalid_values:
+            with self.subTest(
+                value=invalid_value
+            ):
+                with self.assertRaises(
+                    RuntimeError
+                ):
+                    parse_coverage_month(
+                        invalid_value,
+                        field_name="取得対象月",
+                    )
+
+    def test_requested_coverage_period_is_loaded(
+        self,
+    ) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "JPX_COVERAGE_START": "2023-12",
+                "JPX_COVERAGE_END": "2024-02",
+            },
+            clear=True,
+        ):
+            result = (
+                get_requested_coverage_period()
+            )
+
+        self.assertEqual(
+            result,
+            (
+                date(2023, 12, 1),
+                date(2024, 2, 1),
+            ),
+        )
+
+    def test_reversed_coverage_period_is_rejected(
+        self,
+    ) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "JPX_COVERAGE_START": "2024-03",
+                "JPX_COVERAGE_END": "2024-02",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "開始月",
+            ):
+                get_requested_coverage_period()
+
+    def test_coverage_period_over_limit_is_rejected(
+        self,
+    ) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "JPX_COVERAGE_START": "2000-01",
+                "JPX_COVERAGE_END": "2020-01",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "安全上限",
+            ):
+                get_requested_coverage_period()
+
+    def test_http_session_has_user_agent(
+        self,
+    ) -> None:
+        session = create_jpx_http_session()
+
+        try:
+            self.assertEqual(
+                session.headers.get(
+                    "User-Agent"
+                ),
+                HTTP_USER_AGENT,
+            )
+        finally:
+            session.close()
+
+    def test_all_months_are_processed_successfully(
+        self,
+    ) -> None:
+        january_source = self.create_source(
+            2024,
+            1,
+        )
+        february_source = self.create_source(
+            2024,
+            2,
+        )
+        selected_sources = (
+            january_source,
+            february_source,
+        )
+
+        january_result = self.create_result(
+            january_source
+        )
+        february_result = self.create_result(
+            february_source
+        )
+
+        session = self.create_session_mock()
+
+        with patch(
+            "update_jpx_corporate_actions."
+            "get_requested_coverage_period",
+            return_value=(
+                date(2024, 1, 1),
+                date(2024, 2, 1),
+            ),
+        ), patch(
+            "update_jpx_corporate_actions."
+            "create_jpx_http_session",
+            return_value=session,
+        ), patch(
+            "update_jpx_corporate_actions."
+            "discover_monthly_pdf_sources",
+            return_value=selected_sources,
+        ) as discover_mock, patch(
+            "update_jpx_corporate_actions."
+            "select_monthly_pdf_sources",
+            return_value=selected_sources,
+        ) as select_mock, patch(
+            "update_jpx_corporate_actions."
+            "download_and_parse_monthly_sources",
+            side_effect=(
+                january_result,
+                february_result,
+            ),
+        ) as download_mock, patch(
+            "update_jpx_corporate_actions."
+            "save_complete_jpx_coverage",
+        ) as complete_mock, patch(
+            "update_jpx_corporate_actions."
+            "save_failed_monthly_source",
+        ) as failed_mock:
+            result = run_jpx_monthly_update()
+
+        self.assertEqual(
+            result,
+            (
+                2,
+                0,
+            ),
+        )
+
+        discover_mock.assert_called_once_with(
+            session
+        )
+        select_mock.assert_called_once_with(
+            selected_sources,
+            coverage_start=date(
+                2024,
+                1,
+                1,
+            ),
+            coverage_end=date(
+                2024,
+                2,
+                1,
+            ),
+        )
+
+        self.assertEqual(
+            download_mock.call_args_list,
+            [
+                unittest.mock.call(
+                    session,
+                    (
+                        january_source,
+                    ),
+                ),
+                unittest.mock.call(
+                    session,
+                    (
+                        february_source,
+                    ),
+                ),
+            ],
+        )
+
+        self.assertEqual(
+            complete_mock.call_args_list,
+            [
+                unittest.mock.call(
+                    january_result
+                ),
+                unittest.mock.call(
+                    february_result
+                ),
+            ],
+        )
+        failed_mock.assert_not_called()
+        session.__enter__.assert_called_once()
+        session.__exit__.assert_called_once()
+
+    def test_failed_month_is_recorded_and_next_month_continues(
+        self,
+    ) -> None:
+        january_source = self.create_source(
+            2024,
+            1,
+        )
+        february_source = self.create_source(
+            2024,
+            2,
+        )
+        selected_sources = (
+            january_source,
+            february_source,
+        )
+
+        january_error = RuntimeError(
+            "January PDF error"
+        )
+        february_result = self.create_result(
+            february_source
+        )
+
+        session = self.create_session_mock()
+
+        with patch(
+            "update_jpx_corporate_actions."
+            "get_requested_coverage_period",
+            return_value=(
+                date(2024, 1, 1),
+                date(2024, 2, 1),
+            ),
+        ), patch(
+            "update_jpx_corporate_actions."
+            "create_jpx_http_session",
+            return_value=session,
+        ), patch(
+            "update_jpx_corporate_actions."
+            "discover_monthly_pdf_sources",
+            return_value=selected_sources,
+        ), patch(
+            "update_jpx_corporate_actions."
+            "select_monthly_pdf_sources",
+            return_value=selected_sources,
+        ), patch(
+            "update_jpx_corporate_actions."
+            "download_and_parse_monthly_sources",
+            side_effect=(
+                january_error,
+                february_result,
+            ),
+        ) as download_mock, patch(
+            "update_jpx_corporate_actions."
+            "save_complete_jpx_coverage",
+        ) as complete_mock, patch(
+            "update_jpx_corporate_actions."
+            "save_failed_monthly_source",
+        ) as failed_mock:
+            result = run_jpx_monthly_update()
+
+        self.assertEqual(
+            result,
+            (
+                1,
+                1,
+            ),
+        )
+        self.assertEqual(
+            download_mock.call_count,
+            2,
+        )
+        failed_mock.assert_called_once_with(
+            january_source,
+            january_error,
+        )
+        complete_mock.assert_called_once_with(
+            february_result
+        )
+
+    def test_failed_status_save_error_does_not_stop_next_month(
+        self,
+    ) -> None:
+        january_source = self.create_source(
+            2024,
+            1,
+        )
+        february_source = self.create_source(
+            2024,
+            2,
+        )
+        selected_sources = (
+            january_source,
+            february_source,
+        )
+
+        january_error = RuntimeError(
+            "January PDF error"
+        )
+        february_result = self.create_result(
+            february_source
+        )
+
+        session = self.create_session_mock()
+
+        with patch(
+            "update_jpx_corporate_actions."
+            "get_requested_coverage_period",
+            return_value=(
+                date(2024, 1, 1),
+                date(2024, 2, 1),
+            ),
+        ), patch(
+            "update_jpx_corporate_actions."
+            "create_jpx_http_session",
+            return_value=session,
+        ), patch(
+            "update_jpx_corporate_actions."
+            "discover_monthly_pdf_sources",
+            return_value=selected_sources,
+        ), patch(
+            "update_jpx_corporate_actions."
+            "select_monthly_pdf_sources",
+            return_value=selected_sources,
+        ), patch(
+            "update_jpx_corporate_actions."
+            "download_and_parse_monthly_sources",
+            side_effect=(
+                january_error,
+                february_result,
+            ),
+        ) as download_mock, patch(
+            "update_jpx_corporate_actions."
+            "save_complete_jpx_coverage",
+        ) as complete_mock, patch(
+            "update_jpx_corporate_actions."
+            "save_failed_monthly_source",
+            side_effect=RuntimeError(
+                "database error"
+            ),
+        ) as failed_mock:
+            result = run_jpx_monthly_update()
+
+        self.assertEqual(
+            result,
+            (
+                1,
+                1,
+            ),
+        )
+        self.assertEqual(
+            download_mock.call_count,
+            2,
+        )
+        failed_mock.assert_called_once_with(
+            january_source,
+            january_error,
+        )
+        complete_mock.assert_called_once_with(
+            february_result
+        )
+
+    def test_discovery_error_is_propagated(
+        self,
+    ) -> None:
+        session = self.create_session_mock()
+        discovery_error = RuntimeError(
+            "discovery error"
+        )
+
+        with patch(
+            "update_jpx_corporate_actions."
+            "get_requested_coverage_period",
+            return_value=(
+                date(2024, 1, 1),
+                date(2024, 1, 1),
+            ),
+        ), patch(
+            "update_jpx_corporate_actions."
+            "create_jpx_http_session",
+            return_value=session,
+        ), patch(
+            "update_jpx_corporate_actions."
+            "discover_monthly_pdf_sources",
+            side_effect=discovery_error,
+        ), patch(
+            "update_jpx_corporate_actions."
+            "save_complete_jpx_coverage",
+        ) as complete_mock, patch(
+            "update_jpx_corporate_actions."
+            "save_failed_monthly_source",
+        ) as failed_mock:
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "discovery error",
+            ):
+                run_jpx_monthly_update()
+
+        complete_mock.assert_not_called()
+        failed_mock.assert_not_called()
+
+    def test_main_returns_normally_when_all_months_succeed(
+        self,
+    ) -> None:
+        with patch(
+            "update_jpx_corporate_actions."
+            "run_jpx_monthly_update",
+            return_value=(
+                2,
+                0,
+            ),
+        ) as run_mock:
+            main()
+
+        run_mock.assert_called_once_with()
+
+    def test_main_exits_with_one_when_a_month_failed(
+        self,
+    ) -> None:
+        with patch(
+            "update_jpx_corporate_actions."
+            "run_jpx_monthly_update",
+            return_value=(
+                1,
+                1,
+            ),
+        ):
+            with self.assertRaises(
+                SystemExit
+            ) as context:
+                main()
+
+        self.assertEqual(
+            context.exception.code,
+            1,
+        )
+
+    def test_main_exits_with_one_on_fatal_error(
+        self,
+    ) -> None:
+        with patch(
+            "update_jpx_corporate_actions."
+            "run_jpx_monthly_update",
+            side_effect=RuntimeError(
+                "fatal error"
+            ),
+        ):
+            with self.assertRaises(
+                SystemExit
+            ) as context:
+                main()
+
+        self.assertEqual(
+            context.exception.code,
+            1,
+        )
 
 # ============================================================
 # エントリーポイント
