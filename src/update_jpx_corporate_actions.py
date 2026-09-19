@@ -361,14 +361,15 @@ def parse_action_description(
     ratio = extract_ratio(description)
 
     # pdfplumberでは、JPX月次PDFの列見出しが
-    # 「区 分 コード 分割比率（割当率）」という
-    # 1行として抽出される場合がある。
-    # 比率を含まない列見出しを株式分割と誤認しない。
+    # 単独または他の列見出しと結合して抽出される。
+    # 実際の企業行動を示す語と比率がない列見出しだけを
+    # 株式分割として誤認せず無視する。
     if (
         ratio is None
-        and "コード" in description
         and "分割比率" in description
         and "割当率" in description
+        and "株式分割" not in description
+        and "株式併合" not in description
     ):
         return None
 
