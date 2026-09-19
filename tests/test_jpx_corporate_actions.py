@@ -611,6 +611,172 @@ class JpxPdfHeaderRowParsingTest(unittest.TestCase):
             parse_pdf_table_row(row)
 
 # ============================================================
+# JPX月次PDFの対象市場
+# ============================================================
+
+class JpxPdfMarketScopeParsingTest(unittest.TestCase):
+    """銘柄マスター対象外の市場・商品区分を除外する。"""
+
+    def parse_rows(
+        self,
+        rows: list[list[object]],
+    ) -> ParsedJpxPdf:
+        """指定した表行を持つモックPDFを解析する。"""
+
+        page = MagicMock()
+        page.extract_text.return_value = (
+            "17 新株落・権利落等一覧"
+        )
+        page.extract_tables.return_value = [
+            rows
+        ]
+
+        pdf = MagicMock()
+        pdf.pages = [page]
+        pdf.__enter__.return_value = pdf
+        pdf.__exit__.return_value = False
+
+        with patch(
+            "update_jpx_corporate_actions.pdfplumber.open",
+            return_value=pdf,
+        ):
+            return parse_monthly_pdf(
+                b"%PDF-market-scope"
+            )
+
+    def test_tokyo_pro_market_section_is_ignored(
+        self,
+    ) -> None:
+        rows = [
+            [
+                "TOKYO PRO Market",
+                "6695",
+                "トリプルワン",
+                "2024.01.09",
+                "2024.01.10",
+                "1:10 分割",
+            ],
+            [
+                None,
+                "7355",
+                "一寸房",
+                "2024.01.30",
+                "2024.01.31",
+                "4:1 株式併合",
+            ],
+            [
+                "スタンダード Standard",
+                "9301",
+                "三菱倉庫",
+                "2024.01.30",
+                "2024.01.31",
+                "1:2 株式分割",
+            ],
+        ]
+
+        result = self.parse_rows(rows)
+
+        self.assertEqual(
+            tuple(
+                action.security_code
+                for action in result.actions
+            ),
+            ("9301",),
+        )
+
+    def test_foreign_stock_row_is_ignored_without_hiding_domestic_row(
+        self,
+    ) -> None:
+        rows = [
+            [
+                "スタンダード Standard",
+                "9399",
+                (
+                    "ビート・ホールディングス・"
+                    "リミテッド <外国株>"
+                ),
+                "2024.03.25",
+                "2024.03.26",
+                "100:1 株式併合",
+            ],
+            [
+                None,
+                "5352",
+                "黒崎播磨",
+                "2024.03.28",
+                "2024.03.31",
+                "1:4 株式分割",
+            ],
+        ]
+
+        result = self.parse_rows(rows)
+
+        self.assertEqual(
+            tuple(
+                action.security_code
+                for action in result.actions
+            ),
+            ("5352",),
+        )
+
+        self.assertEqual(
+            result.actions[0].adjustment_factor,
+            Decimal("0.2500000000"),
+        )
+
+    def test_etf_section_and_following_rows_are_ignored(
+        self,
+    ) -> None:
+        rows = [
+            [
+                "ETF ETFs",
+                "1492",
+                "MAXIS JPX日経中小型株指数ETF",
+                "2024.01.15",
+                "2024.01.16",
+                "1:30 受益権分割",
+            ],
+            [
+                None,
+                "1489",
+                "NEXT FUNDS 日経平均高配当株50",
+                "2024.01.17",
+                "2024.01.18",
+                "1:2 受益権分割",
+            ],
+        ]
+
+        result = self.parse_rows(rows)
+
+        self.assertEqual(
+            result.actions,
+            (),
+        )
+
+    def test_row_without_market_section_remains_supported(
+        self,
+    ) -> None:
+        rows = [
+            [
+                "9301",
+                "三菱倉庫",
+                "2024.10.30",
+                "2024.10.31",
+                "1:2 株式分割",
+            ],
+        ]
+
+        result = self.parse_rows(rows)
+
+        self.assertEqual(
+            tuple(
+                action.security_code
+                for action in result.actions
+            ),
+            ("9301",),
+        )
+
+# ============================================================
 # JPX月次PDF全体の解析
 # ============================================================
 
