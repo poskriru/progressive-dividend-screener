@@ -36,6 +36,11 @@ from bs4 import BeautifulSoup
 
 from database import create_database_connection
 
+from store_tdnet_policy_pdf_analyses import (
+    TdnetPolicyPdfTarget,
+    process_tdnet_policy_pdf_targets,
+)
+
 from update_edinet_financials import (
     JST,
     create_google_sheets_service,
@@ -45,7 +50,6 @@ from update_edinet_financials import (
     send_discord_notification,
     write_sheet,
 )
-
 
 # ============================================================
 # 定数
@@ -577,6 +581,168 @@ def fetch_tdnet_dividend_disclosures(
 
     return disclosures
 
+# ============================================================
+# PDF本文解析連携
+# ============================================================
+
+def parse_disclosure_published_date(
+    value: str,
+) -> date:
+    """TDnet公開日をdate型へ変換する。"""
+
+    normalized_value = normalize_text(value)
+
+    try:
+        return date.fromisoformat(
+            normalized_value
+        )
+    except ValueError as error:
+        raise RuntimeError(
+            "TDnet公開日の形式が不正です。"
+            "期待形式: YYYY-MM-DD, "
+            f"指定値: {normalized_value}"
+        ) from error
+
+
+def parse_disclosure_published_time(
+    value: str,
+):
+    """TDnet公開時刻をtime型へ変換する。"""
+
+    normalized_value = normalize_text(value)
+
+    if not normalized_value:
+        return None
+
+    for time_format in (
+        "%H:%M",
+        "%H:%M:%S",
+    ):
+        try:
+            return datetime.strptime(
+                normalized_value,
+                time_format,
+            ).time()
+        except ValueError:
+            continue
+
+    raise RuntimeError(
+        "TDnet公開時刻の形式が不正です。"
+        "期待形式: HH:MMまたはHH:MM:SS, "
+        f"指定値: {normalized_value}"
+    )
+
+
+def disclosure_to_policy_pdf_target(
+    disclosure: TdnetDisclosure,
+) -> TdnetPolicyPdfTarget:
+    """TDnet開示をPDF本文解析対象へ変換する。"""
+
+    if not disclosure.is_policy_candidate:
+        raise ValueError(
+            "方針候補ではないTDnet開示は"
+            "PDF本文解析対象へ変換できません。"
+            f"開示ID: {disclosure.disclosure_id}"
+        )
+
+    return TdnetPolicyPdfTarget(
+        disclosure_id=(
+            disclosure.disclosure_id
+        ),
+        security_code=(
+            disclosure.security_code
+        ),
+        published_date=(
+            parse_disclosure_published_date(
+                disclosure.published_date
+            )
+        ),
+        published_time=(
+            parse_disclosure_published_time(
+                disclosure.published_time
+            )
+        ),
+        company_name=(
+            disclosure.company_name
+        ),
+        title=disclosure.title,
+        pdf_url=disclosure.pdf_url,
+    )
+
+
+def build_policy_pdf_targets(
+    disclosures: list[TdnetDisclosure],
+) -> list[TdnetPolicyPdfTarget]:
+    """方針候補だけをPDF本文解析対象へ変換する。"""
+
+    targets_by_id: dict[
+        str,
+        TdnetPolicyPdfTarget,
+    ] = {}
+
+    for disclosure in disclosures:
+        if not disclosure.is_policy_candidate:
+            continue
+
+        target = (
+            disclosure_to_policy_pdf_target(
+                disclosure
+            )
+        )
+
+        if (
+            target.disclosure_id
+            in targets_by_id
+        ):
+            raise RuntimeError(
+                "TDnet PDF本文解析対象の"
+                "開示IDが重複しています。"
+                f"開示ID: {target.disclosure_id}"
+            )
+
+        targets_by_id[
+            target.disclosure_id
+        ] = target
+
+    targets = sorted(
+        targets_by_id.values(),
+        key=lambda target: (
+            target.published_date,
+            (
+                target.published_time
+                or datetime.min.time()
+            ),
+            target.disclosure_id,
+        ),
+    )
+
+    print(
+        "TDnet方針候補をPDF本文解析対象へ"
+        "変換しました。"
+        f"件数: {len(targets):,}"
+    )
+
+    return targets
+
+
+def analyze_fetched_policy_disclosures(
+    disclosures: list[TdnetDisclosure],
+) -> dict[str, int]:
+    """
+    今回取得したTDnet開示の方針候補を解析する。
+
+    完了済みの同一開示はDB側の解析対象選択で省略する。
+    直近期間に残っている失敗開示は最大3回まで再試行する。
+    """
+
+    targets = build_policy_pdf_targets(
+        disclosures
+    )
+
+    return process_tdnet_policy_pdf_targets(
+        targets,
+        maximum_attempts=3,
+    )
 
 # ============================================================
 # Google Sheets履歴
@@ -912,7 +1078,10 @@ def update_tdnet_dividend_disclosures(
     sheets_service,
     spreadsheet_id: str,
 ) -> dict[str, int]:
-    """TDnet履歴・方針候補・Discord通知を更新する。"""
+    """
+    TDnet履歴、方針候補、Discord通知、
+    PDF本文解析結果を更新する。
+    """
 
     lookback_days = get_lookback_days()
     existing_values = prepare_tdnet_disclosure_sheet(
@@ -936,11 +1105,15 @@ def update_tdnet_dividend_disclosures(
         all_disclosures
     )
 
-    # 履歴追記後すぐに通知し、その後の方針候補シート更新が
-    # 失敗しても新着通知を失わないようにする。
+    # 履歴追記後すぐに通知し、その後の処理が失敗しても
+    # 新着通知を失わないようにする。
     notify_new_tdnet_disclosures(
         new_disclosures
     )
+
+    # 従来のGoogle Sheets出力を先に完了させる。
+    # PDF解析処理で予期しないエラーが発生した場合でも、
+    # 表題による一次抽出結果はシートへ残す。
     write_sheet(
         sheets_service,
         spreadsheet_id,
@@ -949,10 +1122,70 @@ def update_tdnet_dividend_disclosures(
         policy_rows,
     )
 
+    # 新規開示だけではなく今回の取得範囲全体を渡すことで、
+    # 直近の取得失敗を再試行できるようにする。
+    # completedかつ同じ解析バージョンの開示は
+    # DB側で省略される。
+    pdf_summary = (
+        analyze_fetched_policy_disclosures(
+            fetched_disclosures
+        )
+    )
+
     result = {
-        "fetched_count": len(fetched_disclosures),
-        "new_count": len(new_disclosures),
-        "policy_candidate_count": len(policy_rows),
+        "fetched_count": len(
+            fetched_disclosures
+        ),
+        "new_count": len(
+            new_disclosures
+        ),
+        "policy_candidate_count": len(
+            policy_rows
+        ),
+        "pdf_target_count": pdf_summary[
+            "target_count"
+        ],
+        "pdf_processing_target_count": (
+            pdf_summary[
+                "processing_target_count"
+            ]
+        ),
+        "pdf_completed_skipped_count": (
+            pdf_summary[
+                "completed_skipped_count"
+            ]
+        ),
+        "pdf_retry_exhausted_count": (
+            pdf_summary[
+                "retry_exhausted_count"
+            ]
+        ),
+        "pdf_completed_count": pdf_summary[
+            "completed_count"
+        ],
+        "pdf_confirmed_count": pdf_summary[
+            "confirmed_count"
+        ],
+        "pdf_not_confirmed_count": (
+            pdf_summary[
+                "not_confirmed_count"
+            ]
+        ),
+        "pdf_manual_review_count": (
+            pdf_summary[
+                "manual_review_count"
+            ]
+        ),
+        "pdf_fetch_failed_count": (
+            pdf_summary[
+                "fetch_failed_count"
+            ]
+        ),
+        "pdf_text_extraction_failed_count": (
+            pdf_summary[
+                "text_extraction_failed_count"
+            ]
+        ),
     }
 
     print(
@@ -960,7 +1193,19 @@ def update_tdnet_dividend_disclosures(
         f"取得: {result['fetched_count']:,}, "
         f"新規: {result['new_count']:,}, "
         "累進配当方針候補: "
-        f"{result['policy_candidate_count']:,}"
+        f"{result['policy_candidate_count']:,}, "
+        "PDF解析対象: "
+        f"{result['pdf_processing_target_count']:,}, "
+        "PDF解析完了: "
+        f"{result['pdf_completed_count']:,}, "
+        "本文confirmed: "
+        f"{result['pdf_confirmed_count']:,}, "
+        "本文manual_review: "
+        f"{result['pdf_manual_review_count']:,}, "
+        "PDF取得失敗: "
+        f"{result['pdf_fetch_failed_count']:,}, "
+        "本文抽出失敗: "
+        f"{result['pdf_text_extraction_failed_count']:,}"
     )
 
     return result
@@ -983,7 +1228,6 @@ def main() -> None:
         sheets_service,
         spreadsheet_id,
     )
-
 
 # ============================================================
 # エントリーポイント
