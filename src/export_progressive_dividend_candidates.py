@@ -127,6 +127,12 @@ CANDIDATE_HEADERS = [
     "TDnet最新方針開示日",
     "TDnet最新方針表題",
     "TDnet方針PDF URL",
+    "TDnet本文確認状態",
+    "TDnet本文判定",
+    "TDnet本文一致フレーズ",
+    "TDnet本文根拠",
+    "TDnet本文根拠ページ",
+    "TDnet本文Analyzer",
     "TDnet減配警戒",
     "TDnet最新配当開示日",
     "TDnet最新配当分類",
@@ -784,111 +790,274 @@ def build_candidate_rows(
 ) -> list[list[Any]]:
     """候補レコードをGoogle Sheetsの列順へ変換する。"""
 
-    updated_at = datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S")
+    updated_at = datetime.now(JST).strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
     rows: list[list[Any]] = []
 
-    for rank, record in enumerate(records, start=1):
+    for rank, record in enumerate(
+        records,
+        start=1,
+    ):
         row = [
             updated_at,
             rank,
-            to_sheet_date(record.get("trading_date")),
-            str(record.get("security_code", "")),
-            str(record.get("company_name", "") or ""),
-            str(record.get("market", "") or ""),
-            str(record.get("industry_33_name", "") or ""),
-            to_sheet_number(record.get("close_price")),
-            to_sheet_number(record.get("dividend_yield_percent")),
-            to_sheet_number(record.get("payout_ratio_percent")),
-            to_sheet_number(record.get("per_ratio")),
-            to_sheet_number(record.get("pbr_ratio")),
-            to_sheet_number(record.get("roe_percent")),
-            to_sheet_number(record.get("equity_ratio_percent")),
-            yen_to_sheet_million(record.get("free_cash_flow_jpy")),
-            to_sheet_number(record.get("dividend_cagr_5y_percent")),
-            to_sheet_integer(record.get("dividend_increase_count_5y")),
-            to_sheet_integer(record.get("dividend_unchanged_count_5y")),
-            to_sheet_integer(record.get("consecutive_non_decrease_periods")),
-            to_sheet_integer(record.get("consecutive_increase_periods")),
-            to_sheet_number(
-                record.get("dividend_latest_annual_dividend_yen")
+            to_sheet_date(
+                record.get("trading_date")
             ),
-            to_sheet_number(record.get("oldest_annual_dividend_yen_5y")),
+            str(
+                record.get("security_code", "")
+            ),
+            str(
+                record.get("company_name", "")
+                or ""
+            ),
+            str(
+                record.get("market", "")
+                or ""
+            ),
+            str(
+                record.get("industry_33_name", "")
+                or ""
+            ),
+            to_sheet_number(
+                record.get("close_price")
+            ),
+            to_sheet_number(
+                record.get(
+                    "dividend_yield_percent"
+                )
+            ),
+            to_sheet_number(
+                record.get(
+                    "payout_ratio_percent"
+                )
+            ),
+            to_sheet_number(
+                record.get("per_ratio")
+            ),
+            to_sheet_number(
+                record.get("pbr_ratio")
+            ),
+            to_sheet_number(
+                record.get("roe_percent")
+            ),
+            to_sheet_number(
+                record.get(
+                    "equity_ratio_percent"
+                )
+            ),
+            yen_to_sheet_million(
+                record.get(
+                    "free_cash_flow_jpy"
+                )
+            ),
+            to_sheet_number(
+                record.get(
+                    "dividend_cagr_5y_percent"
+                )
+            ),
+            to_sheet_integer(
+                record.get(
+                    "dividend_increase_count_5y"
+                )
+            ),
+            to_sheet_integer(
+                record.get(
+                    "dividend_unchanged_count_5y"
+                )
+            ),
+            to_sheet_integer(
+                record.get(
+                    "consecutive_non_decrease_periods"
+                )
+            ),
+            to_sheet_integer(
+                record.get(
+                    "consecutive_increase_periods"
+                )
+            ),
+            to_sheet_number(
+                record.get(
+                    "dividend_latest_annual_dividend_yen"
+                )
+            ),
+            to_sheet_number(
+                record.get(
+                    "oldest_annual_dividend_yen_5y"
+                )
+            ),
             format_dividend_history(
                 record.get("fiscal_periods_5y"),
-                record.get("annual_dividends_yen_5y"),
-            ),
-            str(record.get("financial_source_url", "") or ""),
-            to_sheet_boolean(
-                record.get("tdnet_policy_candidate")
+                record.get(
+                    "annual_dividends_yen_5y"
+                ),
             ),
             str(
-                record.get("tdnet_policy_date", "")
-                or ""
-            ),
-            str(
-                record.get("tdnet_policy_title", "")
-                or ""
-            ),
-            str(
-                record.get("tdnet_policy_url", "")
+                record.get(
+                    "financial_source_url",
+                    "",
+                )
                 or ""
             ),
             to_sheet_boolean(
-                record.get("tdnet_dividend_warning")
+                record.get(
+                    "tdnet_policy_candidate"
+                )
             ),
             str(
-                record.get("tdnet_dividend_date", "")
+                record.get(
+                    "tdnet_policy_date",
+                    "",
+                )
                 or ""
             ),
             str(
-                record.get("tdnet_dividend_category", "")
+                record.get(
+                    "tdnet_policy_title",
+                    "",
+                )
                 or ""
             ),
             str(
-                record.get("tdnet_dividend_title", "")
+                record.get(
+                    "tdnet_policy_url",
+                    "",
+                )
                 or ""
             ),
             str(
-                record.get("tdnet_dividend_url", "")
+                record.get(
+                    "tdnet_policy_analysis_status",
+                    "",
+                )
+                or ""
+            ),
+            str(
+                record.get(
+                    "tdnet_policy_classification",
+                    "",
+                )
+                or ""
+            ),
+            str(
+                record.get(
+                    "tdnet_policy_matched_phrase",
+                    "",
+                )
+                or ""
+            ),
+            str(
+                record.get(
+                    "tdnet_policy_evidence_text",
+                    "",
+                )
+                or ""
+            ),
+            to_sheet_integer(
+                record.get(
+                    "tdnet_policy_evidence_page_number"
+                )
+            ),
+            str(
+                record.get(
+                    "tdnet_policy_analyzer_version",
+                    "",
+                )
+                or ""
+            ),
+            to_sheet_boolean(
+                record.get(
+                    "tdnet_dividend_warning"
+                )
+            ),
+            str(
+                record.get(
+                    "tdnet_dividend_date",
+                    "",
+                )
+                or ""
+            ),
+            str(
+                record.get(
+                    "tdnet_dividend_category",
+                    "",
+                )
+                or ""
+            ),
+            str(
+                record.get(
+                    "tdnet_dividend_title",
+                    "",
+                )
+                or ""
+            ),
+            str(
+                record.get(
+                    "tdnet_dividend_url",
+                    "",
+                )
                 or ""
             ),
             (
                 ADJUSTED_DIVIDEND_NOTE
-                if record.get("is_adjustment_coverage_complete") is True
+                if record.get(
+                    "is_adjustment_coverage_complete"
+                ) is True
                 else RAW_DIVIDEND_CAUTION
             ),
             (
                 "adjusted"
-                if record.get("is_adjustment_coverage_complete") is True
+                if record.get(
+                    "is_adjustment_coverage_complete"
+                ) is True
                 else "raw"
             ),
             to_sheet_boolean(
-                record.get("is_progressive_dividend_5y_raw")
+                record.get(
+                    "is_progressive_dividend_5y_raw"
+                )
             ),
             str(
-                record.get("progressive_dividend_status_5y", "")
+                record.get(
+                    "progressive_dividend_status_5y",
+                    "",
+                )
                 or ""
             ),
             str(
-                record.get("dividend_adjustment_status", "")
+                record.get(
+                    "dividend_adjustment_status",
+                    "",
+                )
                 or ""
             ),
             to_sheet_boolean(
-                record.get("is_adjustment_coverage_complete")
+                record.get(
+                    "is_adjustment_coverage_complete"
+                )
             ),
             to_sheet_number(
-                record.get("latest_cumulative_adjustment_factor"),
+                record.get(
+                    "latest_cumulative_adjustment_factor"
+                ),
                 digits=10,
             ),
             to_sheet_number(
-                record.get("oldest_cumulative_adjustment_factor_5y"),
+                record.get(
+                    "oldest_cumulative_adjustment_factor_5y"
+                ),
                 digits=10,
             ),
             to_sheet_number(
-                record.get("dividend_cagr_5y_adjusted_percent")
+                record.get(
+                    "dividend_cagr_5y_adjusted_percent"
+                )
             ),
             to_sheet_boolean(
-                record.get("is_progressive_dividend_5y_adjusted")
+                record.get(
+                    "is_progressive_dividend_5y_adjusted"
+                )
             ),
             str(
                 record.get(
@@ -898,22 +1067,28 @@ def build_candidate_rows(
                 or ""
             ),
             format_dividend_history(
-                record.get("adjusted_fiscal_periods_5y"),
-                record.get("adjusted_annual_dividends_yen_5y"),
+                record.get(
+                    "adjusted_fiscal_periods_5y"
+                ),
+                record.get(
+                    "adjusted_annual_dividends_yen_5y"
+                ),
             ),
         ]
 
         if len(row) != len(CANDIDATE_HEADERS):
             raise RuntimeError(
                 "累進配当候補の列数が一致しません。"
-                f"順位: {rank}, 期待列数: {len(CANDIDATE_HEADERS)}, "
+                f"順位: {rank}, "
+                f"期待列数: {len(CANDIDATE_HEADERS)}, "
                 f"実際の列数: {len(row)}"
             )
 
         rows.append(row)
 
     print(
-        "Google Sheets出力用の累進配当候補を作成しました。"
+        "Google Sheets出力用の"
+        "累進配当候補を作成しました。"
         f"件数: {len(rows):,}"
     )
 
