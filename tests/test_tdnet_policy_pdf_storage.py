@@ -52,9 +52,9 @@ from store_tdnet_policy_pdf_analyses import (  # noqa: E402
     analyze_and_store_tdnet_policy_pdf,
     build_error_message,
     save_processing_result,
+    select_targets_requiring_analysis,
     validate_target,
 )
-
 
 # ============================================================
 # テストデータ
@@ -427,6 +427,216 @@ class TdnetPolicyPdfProcessingTest(
         )
         mocked_save.assert_called_once()
 
+
+# ============================================================
+# 再取得対象選択
+# ============================================================
+
+class TdnetPolicyPdfTargetSelectionTest(
+    unittest.TestCase
+):
+    """解析済みPDFの再取得防止を確認する。"""
+
+    def create_connection(
+        self,
+        stored_rows,
+    ):
+        """保存済み行を返すDBモックを作成する。"""
+
+        connection = MagicMock()
+        cursor = MagicMock()
+        cursor.fetchall.return_value = stored_rows
+        connection.cursor.return_value.__enter__.return_value = (
+            cursor
+        )
+
+        return connection
+
+    def test_new_target_is_selected(
+        self,
+    ) -> None:
+        connection = self.create_connection([])
+
+        selected, summary = (
+            select_targets_requiring_analysis(
+                connection,
+                [create_target()],
+            )
+        )
+
+        self.assertEqual(
+            selected,
+            [create_target()],
+        )
+        self.assertEqual(
+            summary["selected_count"],
+            1,
+        )
+
+    def test_completed_current_version_is_skipped(
+        self,
+    ) -> None:
+        connection = self.create_connection(
+            [
+                {
+                    "disclosure_id": (
+                        "140120260101000001"
+                    ),
+                    "analysis_status": "completed",
+                    "analyzer_version": "v1",
+                    "fetch_attempt_count": 1,
+                }
+            ]
+        )
+
+        selected, summary = (
+            select_targets_requiring_analysis(
+                connection,
+                [create_target()],
+            )
+        )
+
+        self.assertEqual(
+            selected,
+            [],
+        )
+        self.assertEqual(
+            summary[
+                "completed_skipped_count"
+            ],
+            1,
+        )
+
+    def test_failed_target_below_limit_is_selected(
+        self,
+    ) -> None:
+        connection = self.create_connection(
+            [
+                {
+                    "disclosure_id": (
+                        "140120260101000001"
+                    ),
+                    "analysis_status": (
+                        "fetch_failed"
+                    ),
+                    "analyzer_version": "v1",
+                    "fetch_attempt_count": 2,
+                }
+            ]
+        )
+
+        selected, summary = (
+            select_targets_requiring_analysis(
+                connection,
+                [create_target()],
+                maximum_attempts=3,
+            )
+        )
+
+        self.assertEqual(
+            selected,
+            [create_target()],
+        )
+        self.assertEqual(
+            summary["selected_count"],
+            1,
+        )
+
+    def test_failed_target_at_limit_is_skipped(
+        self,
+    ) -> None:
+        connection = self.create_connection(
+            [
+                {
+                    "disclosure_id": (
+                        "140120260101000001"
+                    ),
+                    "analysis_status": (
+                        "text_extraction_failed"
+                    ),
+                    "analyzer_version": "v1",
+                    "fetch_attempt_count": 3,
+                }
+            ]
+        )
+
+        selected, summary = (
+            select_targets_requiring_analysis(
+                connection,
+                [create_target()],
+                maximum_attempts=3,
+            )
+        )
+
+        self.assertEqual(
+            selected,
+            [],
+        )
+        self.assertEqual(
+            summary[
+                "retry_exhausted_count"
+            ],
+            1,
+        )
+
+    def test_old_analyzer_version_is_selected(
+        self,
+    ) -> None:
+        connection = self.create_connection(
+            [
+                {
+                    "disclosure_id": (
+                        "140120260101000001"
+                    ),
+                    "analysis_status": "completed",
+                    "analyzer_version": "v0",
+                    "fetch_attempt_count": 10,
+                }
+            ]
+        )
+
+        selected, summary = (
+            select_targets_requiring_analysis(
+                connection,
+                [create_target()],
+                maximum_attempts=3,
+            )
+        )
+
+        self.assertEqual(
+            selected,
+            [create_target()],
+        )
+        self.assertEqual(
+            summary["selected_count"],
+            1,
+        )
+
+    def test_duplicate_disclosure_id_is_rejected(
+        self,
+    ) -> None:
+        connection = self.create_connection([])
+
+        with self.assertRaises(ValueError):
+            select_targets_requiring_analysis(
+                connection,
+                [
+                    create_target(),
+                    create_target(),
+                ],
+            )
+
+    def test_invalid_maximum_attempts_is_rejected(
+        self,
+    ) -> None:
+        connection = self.create_connection([])
+
+        with self.assertRaises(ValueError):
+            select_targets_requiring_analysis(
+                connection,
+                [create_target()],
+                maximum_attempts=0,
+            )
 
 # ============================================================
 # エントリーポイント
