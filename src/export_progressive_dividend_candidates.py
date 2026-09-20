@@ -1968,9 +1968,17 @@ def build_discord_notification_description(
                 else ""
             )
 
+            decision_label = (
+                "adjusted"
+                if record.get(
+                    "is_adjustment_coverage_complete"
+                ) is True
+                else "raw"
+            )
+
             lines.append(
                 f"{rank}. `{security_code}` {company_name}"
-                f"{marker_text} — "
+                f"{marker_text} [{decision_label}] "
                 f"利回り {dividend_yield} / "
                 f"5期CAGR {dividend_cagr} / "
                 f"ROE {roe}"
