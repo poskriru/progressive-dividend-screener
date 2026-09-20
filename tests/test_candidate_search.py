@@ -610,7 +610,7 @@ class CandidateSearchMessageTests(unittest.TestCase):
             message,
         )
 
-        def test_empty_results_respect_custom_limit(
+    def test_empty_results_respect_custom_limit(
         self,
     ) -> None:
         message = build_candidate_search_message(
