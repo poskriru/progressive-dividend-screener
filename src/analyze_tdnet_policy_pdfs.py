@@ -23,7 +23,7 @@ from typing import Iterable
 # 定数
 # ============================================================
 
-ANALYZER_VERSION = "v1"
+ANALYZER_VERSION = "v2"
 
 POLICY_CLASSIFICATION_CONFIRMED = "confirmed"
 POLICY_CLASSIFICATION_NOT_CONFIRMED = "not_confirmed"
@@ -38,6 +38,10 @@ POLICY_TARGET_TERMS = (
 )
 
 CONFIRMED_POLICY_PATTERNS = (
+    re.compile(
+        r"累進配当(?:方針|政策)?(?:の)?"
+        r"(?:導入|採用|実施|継続)"
+    ),
     re.compile(
         r"累進配当(?:方針|政策)?を"
         r"(?:導入|採用|実施|継続)"
@@ -80,7 +84,6 @@ MANUAL_REVIEW_MARKERS = (
     "終了",
     "取りやめ",
     "見直し",
-    "変更",
 )
 
 SENTENCE_SEPARATOR_PATTERN = re.compile(

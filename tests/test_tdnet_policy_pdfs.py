@@ -124,6 +124,47 @@ class TdnetPolicyConfirmedTest(unittest.TestCase):
             result.evidence.matched_phrase,
         )
 
+    def test_progressive_dividend_adoption_noun_is_confirmed(
+        self,
+    ) -> None:
+        result = classify_policy_pages(
+            [
+                "当社は累進配当の導入を決定しました。"
+            ]
+        )
+
+        self.assertEqual(
+            result.classification,
+            POLICY_CLASSIFICATION_CONFIRMED,
+        )
+        self.assertIsNotNone(result.evidence)
+        self.assertIn(
+            "累進配当の導入",
+            result.evidence.matched_phrase,
+        )
+
+    def test_actual_adoption_title_is_confirmed(
+        self,
+    ) -> None:
+        result = classify_policy_pages(
+            [
+                (
+                    "剰余金の配当および配当方針の変更"
+                    "(累進配当の導入)に関するお知らせ"
+                )
+            ]
+        )
+
+        self.assertEqual(
+            result.classification,
+            POLICY_CLASSIFICATION_CONFIRMED,
+        )
+        self.assertIsNotNone(result.evidence)
+        self.assertEqual(
+            result.evidence.matched_phrase,
+            "累進配当の導入",
+        )
+
     def test_progressive_policy_as_basic_policy_is_confirmed(
         self,
     ) -> None:
@@ -215,7 +256,6 @@ class TdnetPolicyConfirmedTest(unittest.TestCase):
             2,
         )
 
-
 # ============================================================
 # manual_review判定
 # ============================================================
@@ -239,6 +279,38 @@ class TdnetPolicyManualReviewTest(
             POLICY_CLASSIFICATION_MANUAL_REVIEW,
         )
         self.assertIsNotNone(result.evidence)
+
+    def test_planned_adoption_requires_manual_review(
+        self,
+    ) -> None:
+        result = classify_policy_pages(
+            [
+                "来年度から累進配当の導入を予定しています。"
+            ]
+        )
+
+        self.assertEqual(
+            result.classification,
+            POLICY_CLASSIFICATION_MANUAL_REVIEW,
+        )
+        self.assertIsNotNone(result.evidence)
+
+    def test_policy_change_consideration_requires_manual_review(
+        self,
+    ) -> None:
+        result = classify_policy_pages(
+            [
+                (
+                    "累進配当方針への変更を"
+                    "今後検討します。"
+                )
+            ]
+        )
+
+        self.assertEqual(
+            result.classification,
+            POLICY_CLASSIFICATION_MANUAL_REVIEW,
+        )
 
     def test_policy_goal_requires_manual_review(
         self,
@@ -295,7 +367,6 @@ class TdnetPolicyManualReviewTest(
             result.classification,
             POLICY_CLASSIFICATION_MANUAL_REVIEW,
         )
-
 
 # ============================================================
 # not_confirmed判定
