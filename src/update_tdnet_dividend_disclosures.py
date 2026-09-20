@@ -36,9 +36,19 @@ from bs4 import BeautifulSoup
 
 from database import create_database_connection
 
+from load_tdnet_policy_pdf_analyses import (
+    load_tdnet_policy_pdf_analysis_results,
+)
+
 from store_tdnet_policy_pdf_analyses import (
     TdnetPolicyPdfTarget,
     process_tdnet_policy_pdf_targets,
+)
+
+from sync_tdnet_policy_analysis_sheets import (
+    TDNET_DISCLOSURE_BASE_HEADERS,
+    TDNET_DISCLOSURE_HEADERS_WITH_ANALYSIS,
+    sync_tdnet_policy_analysis_sheets,
 )
 
 from update_edinet_financials import (
@@ -751,7 +761,7 @@ def analyze_fetched_policy_disclosures(
 def disclosure_to_row(
     disclosure: TdnetDisclosure,
 ) -> list[Any]:
-    """TDnet開示を履歴シートの行へ変換する。"""
+    """TDnet開示を履歴シートの基本12列へ変換する。"""
 
     return [
         disclosure.disclosure_id,
@@ -800,10 +810,20 @@ def row_to_disclosure(
         company_name=normalize_text(
             values.get("会社名", "")
         ),
-        title=normalize_text(values.get("表題", "")),
-        category=normalize_text(values.get("分類", "")),
+        title=normalize_text(
+            values.get("表題", "")
+        ),
+        category=normalize_text(
+            values.get("分類", "")
+        ),
         is_policy_candidate=(
-            policy_text in {"true", "1", "yes", "はい"}
+            policy_text
+            in {
+                "true",
+                "1",
+                "yes",
+                "はい",
+            }
         ),
         matched_keywords=tuple(
             keyword.strip()
@@ -825,7 +845,12 @@ def prepare_tdnet_disclosure_sheet(
     sheets_service,
     spreadsheet_id: str,
 ) -> list[list[Any]]:
-    """TDnet履歴シートを作成し、現在値を返す。"""
+    """
+    TDnet履歴シートを作成し、現在値を返す。
+
+    従来の基本12列と、本文解析結果を追加した17列の
+    どちらも読み込めるようにする。
+    """
 
     get_or_create_sheet(
         sheets_service,
@@ -843,21 +868,39 @@ def prepare_tdnet_disclosure_sheet(
             sheets_service,
             spreadsheet_id,
             TDNET_DISCLOSURE_SHEET_NAME,
-            TDNET_DISCLOSURE_HEADERS,
+            TDNET_DISCLOSURE_BASE_HEADERS,
             [],
         )
-        return [TDNET_DISCLOSURE_HEADERS]
+        return [
+            TDNET_DISCLOSURE_BASE_HEADERS
+        ]
 
     headers = [
         normalize_text(value)
         for value in values[0]
     ]
 
-    if headers != TDNET_DISCLOSURE_HEADERS:
+    allowed_headers = (
+        TDNET_DISCLOSURE_BASE_HEADERS,
+        TDNET_DISCLOSURE_HEADERS_WITH_ANALYSIS,
+    )
+
+    if headers not in allowed_headers:
         raise RuntimeError(
             "TDnet配当開示シートの列が一致しません。"
-            f"期待列: {TDNET_DISCLOSURE_HEADERS}, "
+            "期待列は従来12列または"
+            "本文解析付き17列です。"
             f"実際の列: {headers}"
+        )
+
+    if (
+        headers
+        == TDNET_DISCLOSURE_BASE_HEADERS
+    ):
+        print(
+            "TDnet配当開示シートは従来の"
+            "12列形式です。"
+            "PDF解析後に17列形式へ移行します。"
         )
 
     return values
@@ -869,7 +912,12 @@ def append_new_disclosures(
     disclosures: list[TdnetDisclosure],
     existing_values: list[list[Any]],
 ) -> list[TdnetDisclosure]:
-    """履歴にないTDnet開示だけを追記して返す。"""
+    """
+    履歴にないTDnet開示だけを基本12列へ追記する。
+
+    本文解析完了後にシート全体を17列形式で
+    再同期するため、ここでは基本列だけを追記する。
+    """
 
     existing_ids = {
         normalize_text(row[0])
@@ -879,7 +927,10 @@ def append_new_disclosures(
     new_disclosures = [
         disclosure
         for disclosure in disclosures
-        if disclosure.disclosure_id not in existing_ids
+        if (
+            disclosure.disclosure_id
+            not in existing_ids
+        )
     ]
 
     if not new_disclosures:
@@ -898,7 +949,10 @@ def append_new_disclosures(
         .values()
         .append(
             spreadsheetId=spreadsheet_id,
-            range=f"'{TDNET_DISCLOSURE_SHEET_NAME}'!A:L",
+            range=(
+                f"'{TDNET_DISCLOSURE_SHEET_NAME}'"
+                "!A:L"
+            ),
             valueInputOption="RAW",
             insertDataOption="INSERT_ROWS",
             body={"values": rows},
@@ -912,7 +966,6 @@ def append_new_disclosures(
     )
 
     return new_disclosures
-
 
 # ============================================================
 # 累進配当方針候補
@@ -1079,56 +1132,77 @@ def update_tdnet_dividend_disclosures(
     spreadsheet_id: str,
 ) -> dict[str, int]:
     """
-    TDnet履歴、方針候補、Discord通知、
-    PDF本文解析結果を更新する。
+    TDnet履歴、PDF本文解析結果、
+    方針候補シート、Discord通知を更新する。
     """
 
     lookback_days = get_lookback_days()
-    existing_values = prepare_tdnet_disclosure_sheet(
-        sheets_service,
-        spreadsheet_id,
+
+    # 従来12列と新17列の両方を読み込める。
+    existing_values = (
+        prepare_tdnet_disclosure_sheet(
+            sheets_service,
+            spreadsheet_id,
+        )
     )
-    fetched_disclosures = fetch_tdnet_dividend_disclosures(
-        lookback_days=lookback_days,
+
+    fetched_disclosures = (
+        fetch_tdnet_dividend_disclosures(
+            lookback_days=lookback_days,
+        )
     )
+
+    # PDF解析前でも新着開示履歴を失わないよう、
+    # 基本12列を先に追記する。
     new_disclosures = append_new_disclosures(
         sheets_service,
         spreadsheet_id,
         fetched_disclosures,
         existing_values,
     )
-    all_disclosures = load_all_stored_disclosures(
-        existing_values,
-        new_disclosures,
-    )
-    policy_rows = build_progressive_policy_rows(
-        all_disclosures
+
+    all_disclosures = (
+        load_all_stored_disclosures(
+            existing_values,
+            new_disclosures,
+        )
     )
 
-    # 履歴追記後すぐに通知し、その後の処理が失敗しても
-    # 新着通知を失わないようにする。
+    # 履歴追記後すぐに通知する。
+    # PDF取得失敗などがあっても新着通知を失わない。
     notify_new_tdnet_disclosures(
         new_disclosures
     )
 
-    # 従来のGoogle Sheets出力を先に完了させる。
-    # PDF解析処理で予期しないエラーが発生した場合でも、
-    # 表題による一次抽出結果はシートへ残す。
-    write_sheet(
-        sheets_service,
-        spreadsheet_id,
-        PROGRESSIVE_POLICY_SHEET_NAME,
-        PROGRESSIVE_POLICY_HEADERS,
-        policy_rows,
-    )
-
-    # 新規開示だけではなく今回の取得範囲全体を渡すことで、
-    # 直近の取得失敗を再試行できるようにする。
-    # completedかつ同じ解析バージョンの開示は
-    # DB側で省略される。
+    # 今回の取得範囲に含まれる方針候補を解析する。
+    # 完了済みの同一バージョンはDB側で省略される。
     pdf_summary = (
         analyze_fetched_policy_disclosures(
             fetched_disclosures
+        )
+    )
+
+    # 保存済み履歴に含まれる全方針候補について、
+    # PostgreSQLから最新の本文解析結果を読み込む。
+    policy_disclosure_ids = [
+        disclosure.disclosure_id
+        for disclosure in all_disclosures
+        if disclosure.is_policy_candidate
+    ]
+    analysis_results = (
+        load_tdnet_policy_pdf_analysis_results(
+            policy_disclosure_ids
+        )
+    )
+
+    # TDnet配当開示は12列から17列へ移行し、
+    # 累進配当方針候補は10列から15列へ移行する。
+    sheet_summary = (
+        sync_tdnet_policy_analysis_sheets(
+            sheets_service,
+            spreadsheet_id,
+            all_disclosures,
+            analysis_results,
         )
     )
 
@@ -1139,8 +1213,20 @@ def update_tdnet_dividend_disclosures(
         "new_count": len(
             new_disclosures
         ),
-        "policy_candidate_count": len(
-            policy_rows
+        "stored_disclosure_count": (
+            sheet_summary[
+                "disclosure_row_count"
+            ]
+        ),
+        "policy_candidate_count": (
+            sheet_summary[
+                "policy_row_count"
+            ]
+        ),
+        "sheet_analysis_result_count": (
+            sheet_summary[
+                "result_count"
+            ]
         ),
         "pdf_target_count": pdf_summary[
             "target_count"
@@ -1186,26 +1272,55 @@ def update_tdnet_dividend_disclosures(
                 "text_extraction_failed_count"
             ]
         ),
+        "sheet_confirmed_count": (
+            sheet_summary[
+                "confirmed_count"
+            ]
+        ),
+        "sheet_not_confirmed_count": (
+            sheet_summary[
+                "not_confirmed_count"
+            ]
+        ),
+        "sheet_manual_review_count": (
+            sheet_summary[
+                "manual_review_count"
+            ]
+        ),
+        "sheet_fetch_failed_count": (
+            sheet_summary[
+                "fetch_failed_count"
+            ]
+        ),
+        "sheet_text_extraction_failed_count": (
+            sheet_summary[
+                "text_extraction_failed_count"
+            ]
+        ),
     }
 
     print(
         "TDnet配当関連開示の更新が完了しました。"
         f"取得: {result['fetched_count']:,}, "
         f"新規: {result['new_count']:,}, "
+        "保存済み開示: "
+        f"{result['stored_disclosure_count']:,}, "
         "累進配当方針候補: "
         f"{result['policy_candidate_count']:,}, "
-        "PDF解析対象: "
+        "PDF処理対象: "
         f"{result['pdf_processing_target_count']:,}, "
         "PDF解析完了: "
         f"{result['pdf_completed_count']:,}, "
+        "シート解析結果: "
+        f"{result['sheet_analysis_result_count']:,}, "
         "本文confirmed: "
-        f"{result['pdf_confirmed_count']:,}, "
+        f"{result['sheet_confirmed_count']:,}, "
         "本文manual_review: "
-        f"{result['pdf_manual_review_count']:,}, "
+        f"{result['sheet_manual_review_count']:,}, "
         "PDF取得失敗: "
-        f"{result['pdf_fetch_failed_count']:,}, "
+        f"{result['sheet_fetch_failed_count']:,}, "
         "本文抽出失敗: "
-        f"{result['pdf_text_extraction_failed_count']:,}"
+        f"{result['sheet_text_extraction_failed_count']:,}"
     )
 
     return result
@@ -1214,14 +1329,20 @@ def update_tdnet_dividend_disclosures(
 def main() -> None:
     """認証情報を取得してTDnet配当開示を更新する。"""
 
-    spreadsheet_id = get_required_environment_variable(
-        "GOOGLE_SPREADSHEET_ID"
+    spreadsheet_id = (
+        get_required_environment_variable(
+            "GOOGLE_SPREADSHEET_ID"
+        )
     )
-    service_account_json = get_required_environment_variable(
-        "GOOGLE_SERVICE_ACCOUNT_JSON"
+    service_account_json = (
+        get_required_environment_variable(
+            "GOOGLE_SERVICE_ACCOUNT_JSON"
+        )
     )
-    sheets_service = create_google_sheets_service(
-        service_account_json
+    sheets_service = (
+        create_google_sheets_service(
+            service_account_json
+        )
     )
 
     update_tdnet_dividend_disclosures(
