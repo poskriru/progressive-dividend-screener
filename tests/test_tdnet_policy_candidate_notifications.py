@@ -12,6 +12,7 @@ sys.path.insert(0, str(SRC_DIRECTORY))
 
 
 from export_progressive_dividend_candidates import (  # noqa: E402
+    CandidateChanges,
     CandidateCriteria,
     build_discord_notification_description,
     build_tdnet_policy_discord_lines,
