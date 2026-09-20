@@ -49,6 +49,13 @@ from update_edinet_financials import (
     write_sheet,
 )
 
+from enrich_tdnet_policy_candidates import (
+    enrich_candidates_with_tdnet_policy_results,
+)
+from load_latest_tdnet_policy_results import (
+    load_latest_tdnet_policy_results,
+)
+
 
 # ============================================================
 # 定数
@@ -1094,6 +1101,54 @@ def build_candidate_rows(
 
     return rows
 
+# ============================================================
+# TDnet PDF本文解析結果
+# ============================================================
+
+def enrich_candidate_records_with_latest_tdnet_policy_results(
+    records: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """候補銘柄へPostgreSQL上の最新TDnet本文解析結果を付与する。"""
+
+    security_codes = [
+        record.get("security_code")
+        for record in records
+    ]
+
+    policy_results = load_latest_tdnet_policy_results(
+        security_codes
+    )
+
+    enriched_records = (
+        enrich_candidates_with_tdnet_policy_results(
+            records,
+            policy_results,
+        )
+    )
+
+    completed_count = sum(
+        1
+        for record in enriched_records
+        if record.get(
+            "tdnet_policy_analysis_status"
+        ) == "completed"
+    )
+    confirmed_count = sum(
+        1
+        for record in enriched_records
+        if record.get(
+            "tdnet_policy_classification"
+        ) == "confirmed"
+    )
+
+    print(
+        "TDnet PDF本文解析結果を候補へ反映しました。"
+        f"取得件数: {len(policy_results)}, "
+        f"completed: {completed_count}, "
+        f"confirmed: {confirmed_count}"
+    )
+
+    return enriched_records
 
 # ============================================================
 # 前回候補との差分
@@ -2205,6 +2260,11 @@ def main() -> None:
         records,
         tdnet_policies,
         tdnet_alerts,
+    )
+    records = (
+        enrich_candidate_records_with_latest_tdnet_policy_results(
+            records
+        )
     )
     changes = calculate_candidate_changes(
         previous_snapshot,
