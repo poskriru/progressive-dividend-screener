@@ -555,6 +555,23 @@ def build_candidate_search_result_line(
         f" / ROE {roe_percent}"
     )
 
+def finalize_candidate_search_message(
+    lines: Sequence[str],
+    *,
+    max_chars: int,
+) -> str:
+    """Discordメッセージを指定文字数以内へ確実に収める。"""
+
+    message = "\n".join(lines)
+
+    if len(message) <= max_chars:
+        return message
+
+    truncated_message = (
+        message[: max_chars - 1].rstrip()
+    )
+
+    return truncated_message + "…"
 
 def build_candidate_search_message(
     records: Sequence[Mapping[str, Any]],
@@ -595,7 +612,11 @@ def build_candidate_search_message(
         lines.append(
             "条件に一致する銘柄はありません。"
         )
-        return "\n".join(lines)
+
+        return finalize_candidate_search_message(
+            lines,
+            max_chars=max_chars,
+        )
 
     total_records = len(records)
 
@@ -640,11 +661,8 @@ def build_candidate_search_message(
 
         break
 
-    message = "\n".join(lines)
+    return finalize_candidate_search_message(
+        lines,
+        max_chars=max_chars,
+    )
 
-    if len(message) > max_chars:
-        raise RuntimeError(
-            "Discord検索結果が文字数上限を超えました。"
-        )
-
-    return message
