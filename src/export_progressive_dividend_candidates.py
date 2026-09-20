@@ -1733,6 +1733,91 @@ def format_notification_metric(
     normalized = f"{number:.2f}".rstrip("0").rstrip(".")
     return f"{normalized}{suffix}"
 
+# ============================================================
+# Discord向けTDnet PDF本文解析表示
+# ============================================================
+
+def build_tdnet_policy_discord_lines(
+    record: dict[str, Any],
+) -> list[str]:
+    """
+    Discord通知へ表示するTDnet PDF本文解析行を作成する。
+
+    confirmed、manual_review、解析失敗など、
+   確認が必要な結果だけを通知へ追加する。
+    not_confirmedと解析結果なしは表示しない。
+    """
+
+    analysis_status = str(
+        record.get(
+            "tdnet_policy_analysis_status",
+            "",
+        )
+        or ""
+    ).strip()
+    classification = str(
+        record.get(
+            "tdnet_policy_classification",
+            "",
+        )
+        or ""
+    ).strip()
+    matched_phrase = " ".join(
+        str(
+            record.get(
+                "tdnet_policy_matched_phrase",
+                "",
+            )
+            or ""
+        ).split()
+    )
+
+    should_display = (
+        classification
+        in {
+            "confirmed",
+            "manual_review",
+        }
+        or (
+            bool(analysis_status)
+            and analysis_status != "completed"
+        )
+    )
+
+    if not should_display:
+        return []
+
+    lines: list[str] = []
+
+    if analysis_status:
+        lines.append(
+            "   - TDnet本文確認状態: "
+            f"`{analysis_status}`"
+        )
+
+    if classification:
+        lines.append(
+            "   - TDnet本文判定: "
+            f"`{classification}`"
+        )
+
+    if matched_phrase:
+        maximum_phrase_length = 120
+
+        if len(matched_phrase) > maximum_phrase_length:
+            matched_phrase = (
+                matched_phrase[
+                    :maximum_phrase_length - 1
+                ]
+                + "…"
+            )
+
+        lines.append(
+            "   - 一致フレーズ: "
+            f"{matched_phrase}"
+        )
+
+    return lines
 
 def build_discord_notification_description(
     records: list[dict[str, Any]],
@@ -1846,23 +1931,54 @@ def build_discord_notification_description(
             if record.get("tdnet_dividend_warning"):
                 markers.append("TDnet減配警戒")
 
+            analysis_status = str(
+                record.get(
+                    "tdnet_policy_analysis_status",
+                    "",
+                )
+                or ""
+            ).strip()
+            classification = str(
+                record.get(
+                    "tdnet_policy_classification",
+                    "",
+                )
+                or ""
+            ).strip()
+
+            if classification == "confirmed":
+                markers.append(
+                    "TDnet本文 confirmed"
+                )
+            elif classification == "manual_review":
+                markers.append(
+                    "TDnet本文 manual_review"
+                )
+            elif (
+                analysis_status
+                and analysis_status != "completed"
+            ):
+                markers.append(
+                    f"TDnet本文 {analysis_status}"
+                )
+
             marker_text = (
                 " [" + " / ".join(markers) + "]"
                 if markers
                 else ""
             )
 
-            decision_label = (
-                "adjusted"
-                if record.get("is_adjustment_coverage_complete") is True
-                else "raw"
-            )
             lines.append(
                 f"{rank}. `{security_code}` {company_name}"
-                f"{marker_text} [{decision_label}] — "
+                f"{marker_text} — "
                 f"利回り {dividend_yield} / "
                 f"5期CAGR {dividend_cagr} / "
                 f"ROE {roe}"
+            )
+            lines.extend(
+                build_tdnet_policy_discord_lines(
+                    record
+                )
             )
 
     lines.extend(
