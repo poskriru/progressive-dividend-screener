@@ -229,6 +229,10 @@ class TdnetPolicyCandidateNotificationTest(
             "TDnet本文判定: `confirmed`",
             description,
         )
+        self.assertIn(
+            "[adjusted] — 利回り",
+            description,
+        )
 
     def test_candidate_description_keeps_raw_label(
         self,
@@ -268,6 +272,10 @@ class TdnetPolicyCandidateNotificationTest(
 
         self.assertIn(
             "`1234` テスト会社 [raw]",
+            description,
+        )
+        self.assertIn(
+            "[raw] — 利回り",
             description,
         )
 
