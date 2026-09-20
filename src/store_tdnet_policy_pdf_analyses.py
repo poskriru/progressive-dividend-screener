@@ -470,17 +470,166 @@ def analyze_and_store_tdnet_policy_pdf(
 
 
 # ============================================================
-# 一括処理
+# 解析対象選択
 # ============================================================
 
-def process_tdnet_policy_pdf_targets(
+def select_targets_requiring_analysis(
+    connection,
     targets: Iterable[TdnetPolicyPdfTarget],
-) -> dict[str, int]:
-    """複数のTDnet方針候補PDFを順番に解析する。"""
+    *,
+    maximum_attempts: int = 3,
+) -> tuple[
+    list[TdnetPolicyPdfTarget],
+    dict[str, int],
+]:
+    """
+    未処理、解析ロジック更新、再試行可能な対象だけを返す。
+
+    completedかつ同じanalyzer_versionの開示は再取得しない。
+    失敗した開示はmaximum_attemptsまで再試行する。
+    analyzer_versionが変わった場合は試行回数にかかわらず
+    再解析する。
+    """
+
+    if maximum_attempts <= 0:
+        raise ValueError(
+            "maximum_attemptsは1以上で指定してください。"
+        )
 
     target_list = list(targets)
-    summary = {
-        "target_count": len(target_list),
+    target_by_id: dict[
+        str,
+        TdnetPolicyPdfTarget,
+    ] = {}
+
+    for target in target_list:
+        validate_target(target)
+        disclosure_id = (
+            target.disclosure_id.strip()
+        )
+
+        if disclosure_id in target_by_id:
+            raise ValueError(
+                "TDnet PDF解析対象の開示IDが重複しています。"
+                f"開示ID: {disclosure_id}"
+            )
+
+        target_by_id[disclosure_id] = target
+
+    selection_summary = {
+        "input_count": len(target_list),
+        "selected_count": 0,
+        "completed_skipped_count": 0,
+        "retry_exhausted_count": 0,
+    }
+
+    if not target_list:
+        return [], selection_summary
+
+    query = """
+        SELECT
+            disclosure_id,
+            analysis_status,
+            analyzer_version,
+            fetch_attempt_count
+        FROM screener.tdnet_policy_pdf_analyses
+        WHERE disclosure_id = ANY(%s)
+        ORDER BY disclosure_id;
+    """
+
+    with connection.cursor() as cursor:
+        cursor.execute(
+            query,
+            (
+                list(target_by_id),
+            ),
+        )
+        stored_by_id = {
+            str(row["disclosure_id"]): dict(row)
+            for row in cursor.fetchall()
+        }
+
+    selected_targets = []
+
+    for target in target_list:
+        disclosure_id = (
+            target.disclosure_id.strip()
+        )
+        stored = stored_by_id.get(
+            disclosure_id
+        )
+
+        if stored is None:
+            selected_targets.append(target)
+            continue
+
+        stored_version = str(
+            stored.get(
+                "analyzer_version",
+                "",
+            )
+            or ""
+        )
+        stored_status = str(
+            stored.get(
+                "analysis_status",
+                "",
+            )
+            or ""
+        )
+        attempt_count = int(
+            stored.get(
+                "fetch_attempt_count",
+                0,
+            )
+            or 0
+        )
+
+        if stored_version != ANALYZER_VERSION:
+            selected_targets.append(target)
+            continue
+
+        if (
+            stored_status
+            == ANALYSIS_STATUS_COMPLETED
+        ):
+            selection_summary[
+                "completed_skipped_count"
+            ] += 1
+            continue
+
+        if attempt_count >= maximum_attempts:
+            selection_summary[
+                "retry_exhausted_count"
+            ] += 1
+            continue
+
+        selected_targets.append(target)
+
+    selection_summary[
+        "selected_count"
+    ] = len(selected_targets)
+
+    return (
+        selected_targets,
+        selection_summary,
+    )
+
+
+# ============================================================
+# 集計
+# ============================================================
+
+def create_processing_summary(
+    target_count: int,
+) -> dict[str, int]:
+    """一括処理の初期集計を作成する。"""
+
+    return {
+        "target_count": target_count,
+        "processing_target_count": 0,
+        "completed_skipped_count": 0,
+        "retry_exhausted_count": 0,
         "completed_count": 0,
         "confirmed_count": 0,
         "not_confirmed_count": 0,
@@ -489,20 +638,114 @@ def process_tdnet_policy_pdf_targets(
         "text_extraction_failed_count": 0,
     }
 
+
+def add_result_to_summary(
+    summary: dict[str, int],
+    result: TdnetPolicyPdfProcessingResult,
+) -> None:
+    """1件の処理結果を集計へ追加する。"""
+
+    if (
+        result.analysis_status
+        == ANALYSIS_STATUS_COMPLETED
+    ):
+        summary["completed_count"] += 1
+
+        classification_key = (
+            f"{result.policy_classification}_count"
+        )
+
+        if classification_key in summary:
+            summary[classification_key] += 1
+
+        return
+
+    if (
+        result.analysis_status
+        == ANALYSIS_STATUS_FETCH_FAILED
+    ):
+        summary["fetch_failed_count"] += 1
+        return
+
+    if (
+        result.analysis_status
+        == ANALYSIS_STATUS_TEXT_EXTRACTION_FAILED
+    ):
+        summary[
+            "text_extraction_failed_count"
+        ] += 1
+
+
+# ============================================================
+# 一括処理
+# ============================================================
+
+def process_tdnet_policy_pdf_targets(
+    targets: Iterable[TdnetPolicyPdfTarget],
+    *,
+    maximum_attempts: int = 3,
+) -> dict[str, int]:
+    """
+    必要なTDnet方針候補PDFだけを順番に解析する。
+
+    completedかつ現在の解析バージョンと同じ開示は
+    再取得しない。
+    """
+
+    target_list = list(targets)
+    summary = create_processing_summary(
+        len(target_list)
+    )
+
     if not target_list:
         print(
             "TDnet PDF本文解析の対象はありません。"
         )
         return summary
 
-    session = create_pdf_http_session()
+    with create_database_connection(
+        "store_tdnet_policy_pdf_analyses"
+    ) as connection:
+        (
+            selected_targets,
+            selection_summary,
+        ) = select_targets_requiring_analysis(
+            connection,
+            target_list,
+            maximum_attempts=maximum_attempts,
+        )
 
-    try:
-        with create_database_connection(
-            "store_tdnet_policy_pdf_analyses"
-        ) as connection:
+        summary["processing_target_count"] = (
+            selection_summary["selected_count"]
+        )
+        summary["completed_skipped_count"] = (
+            selection_summary[
+                "completed_skipped_count"
+            ]
+        )
+        summary["retry_exhausted_count"] = (
+            selection_summary[
+                "retry_exhausted_count"
+            ]
+        )
+
+        if not selected_targets:
+            print(
+                "TDnet PDF本文解析が必要な対象は"
+                "ありません。"
+                f"入力: {len(target_list):,}, "
+                "解析済み省略: "
+                f"{summary['completed_skipped_count']:,}, "
+                "再試行上限: "
+                f"{summary['retry_exhausted_count']:,}"
+            )
+            return summary
+
+        session = create_pdf_http_session()
+
+        try:
             for index, target in enumerate(
-                target_list,
+                selected_targets,
                 start=1,
             ):
                 result = (
@@ -512,70 +755,45 @@ def process_tdnet_policy_pdf_targets(
                         target,
                     )
                 )
-
-                if (
-                    result.analysis_status
-                    == ANALYSIS_STATUS_COMPLETED
-                ):
-                    summary[
-                        "completed_count"
-                    ] += 1
-
-                    classification_key = (
-                        f"{result.policy_classification}"
-                        "_count"
-                    )
-
-                    if classification_key in summary:
-                        summary[
-                            classification_key
-                        ] += 1
-
-                elif (
-                    result.analysis_status
-                    == ANALYSIS_STATUS_FETCH_FAILED
-                ):
-                    summary[
-                        "fetch_failed_count"
-                    ] += 1
-
-                elif (
-                    result.analysis_status
-                    == (
-                        ANALYSIS_STATUS_TEXT_EXTRACTION_FAILED
-                    )
-                ):
-                    summary[
-                        "text_extraction_failed_count"
-                    ] += 1
+                add_result_to_summary(
+                    summary,
+                    result,
+                )
 
                 print(
                     "TDnet PDF本文解析: "
-                    f"{index:,}/{len(target_list):,}, "
+                    f"{index:,}/"
+                    f"{len(selected_targets):,}, "
                     f"開示ID={target.disclosure_id}, "
                     f"状態={result.analysis_status}, "
                     "判定="
                     f"{result.policy_classification or '-'}"
                 )
 
-                if index < len(target_list):
+                if index < len(selected_targets):
                     time.sleep(
                         REQUEST_INTERVAL_SECONDS
                     )
 
-    finally:
-        close = getattr(
-            session,
-            "close",
-            None,
-        )
+        finally:
+            close = getattr(
+                session,
+                "close",
+                None,
+            )
 
-        if callable(close):
-            close()
+            if callable(close):
+                close()
 
     print(
         "TDnet PDF本文解析が完了しました。"
-        f"対象: {summary['target_count']:,}, "
+        f"入力: {summary['target_count']:,}, "
+        "処理対象: "
+        f"{summary['processing_target_count']:,}, "
+        "解析済み省略: "
+        f"{summary['completed_skipped_count']:,}, "
+        "再試行上限: "
+        f"{summary['retry_exhausted_count']:,}, "
         f"完了: {summary['completed_count']:,}, "
         f"confirmed: {summary['confirmed_count']:,}, "
         "not_confirmed: "
