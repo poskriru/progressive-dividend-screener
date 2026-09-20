@@ -202,10 +202,19 @@ class TdnetPolicyCandidateNotificationTest(
             ),
         }
 
+        changes = CandidateChanges(
+            comparison_id="adjusted-label-test",
+            is_first_export=False,
+            added_candidates=(),
+            removed_candidates=(),
+        )
+
         description = (
             build_discord_notification_description(
                 [record],
                 criteria,
+                changes,
+                {},
             )
         )
 
@@ -241,10 +250,19 @@ class TdnetPolicyCandidateNotificationTest(
             "tdnet_dividend_warning": False,
         }
 
+        changes = CandidateChanges(
+            comparison_id="raw-label-test",
+            is_first_export=False,
+            added_candidates=(),
+            removed_candidates=(),
+        )
+
         description = (
             build_discord_notification_description(
                 [record],
                 criteria,
+                changes,
+                {},
             )
         )
 
