@@ -58,46 +58,178 @@ LEGACY_CANDIDATE_HEADERS = [
 
 
 class OutputContractTest(unittest.TestCase):
-    def test_existing_indicator_columns_are_unchanged_and_new_columns_append(self) -> None:
-        self.assertEqual(DATABASE_INDICATOR_HEADERS[:49], LEGACY_INDICATOR_HEADERS)
-        self.assertEqual(len(DATABASE_INDICATOR_HEADERS), 61)
+    """Google Sheetsの出力列契約を確認する。"""
 
-    def test_existing_candidate_columns_are_unchanged_and_new_columns_append(self) -> None:
-        self.assertEqual(CANDIDATE_HEADERS[:34], LEGACY_CANDIDATE_HEADERS)
-        self.assertEqual(len(CANDIDATE_HEADERS), 45)
+    TDNET_POLICY_ANALYSIS_HEADERS = [
+        "TDnet本文確認状態",
+        "TDnet本文判定",
+        "TDnet本文一致フレーズ",
+        "TDnet本文根拠",
+        "TDnet本文根拠ページ",
+        "TDnet本文Analyzer",
+    ]
 
-    def test_indicator_row_keeps_raw_and_adjusted_history(self) -> None:
+    def test_existing_indicator_columns_are_unchanged_and_new_columns_append(
+        self,
+    ) -> None:
+        self.assertEqual(
+            DATABASE_INDICATOR_HEADERS[:49],
+            LEGACY_INDICATOR_HEADERS,
+        )
+        self.assertEqual(
+            len(DATABASE_INDICATOR_HEADERS),
+            61,
+        )
+
+    def test_candidate_analysis_columns_are_inserted_after_policy_url(
+        self,
+    ) -> None:
+        self.assertEqual(
+            CANDIDATE_HEADERS[:28],
+            LEGACY_CANDIDATE_HEADERS[:28],
+        )
+        self.assertEqual(
+            CANDIDATE_HEADERS[28:34],
+            self.TDNET_POLICY_ANALYSIS_HEADERS,
+        )
+        self.assertEqual(
+            CANDIDATE_HEADERS[34:40],
+            LEGACY_CANDIDATE_HEADERS[28:34],
+        )
+        self.assertEqual(
+            len(CANDIDATE_HEADERS),
+            51,
+        )
+
+    def test_indicator_row_keeps_raw_and_adjusted_history(
+        self,
+    ) -> None:
         record = {
             "security_code": "1234",
             "company_name": "テスト",
-            "fiscal_periods_5y": [date(2021, 3, 31)],
-            "annual_dividends_yen_5y": [Decimal("100")],
-            "adjusted_fiscal_periods_5y": [date(2021, 3, 31)],
-            "adjusted_annual_dividends_yen_5y": [Decimal("50")],
+            "fiscal_periods_5y": [
+                date(2021, 3, 31)
+            ],
+            "annual_dividends_yen_5y": [
+                Decimal("100")
+            ],
+            "adjusted_fiscal_periods_5y": [
+                date(2021, 3, 31)
+            ],
+            "adjusted_annual_dividends_yen_5y": [
+                Decimal("50")
+            ],
             "is_adjustment_coverage_complete": True,
         }
-        row = build_indicator_rows([record])[0]
-        self.assertEqual(len(row), 61)
-        self.assertEqual(row[47], "2021-03-31:100.0")
-        self.assertEqual(row[60], "2021-03-31:50.0")
 
-    def test_candidate_note_identifies_selected_decision(self) -> None:
+        row = build_indicator_rows(
+            [record]
+        )[0]
+
+        self.assertEqual(len(row), 61)
+        self.assertEqual(
+            row[47],
+            "2021-03-31:100.0",
+        )
+        self.assertEqual(
+            row[60],
+            "2021-03-31:50.0",
+        )
+
+    def test_candidate_row_contains_tdnet_policy_analysis(
+        self,
+    ) -> None:
+        record = {
+            "security_code": "8057",
+            "company_name": "内田洋行",
+            "tdnet_policy_candidate": True,
+            "tdnet_policy_date": date(
+                2026,
+                9,
+                2,
+            ),
+            "tdnet_policy_title": (
+                "配当方針の変更"
+                "(累進配当の導入)"
+            ),
+            "tdnet_policy_url": (
+                "https://www.release.tdnet.info/"
+                "inbs/140120260901529442.pdf"
+            ),
+            "tdnet_policy_analysis_status": (
+                "completed"
+            ),
+            "tdnet_policy_classification": (
+                "confirmed"
+            ),
+            "tdnet_policy_matched_phrase": (
+                "累進配当の導入"
+            ),
+            "tdnet_policy_evidence_text": (
+                "累進配当の導入に関するお知らせ"
+            ),
+            "tdnet_policy_evidence_page_number": 1,
+            "tdnet_policy_analyzer_version": "v2",
+            "tdnet_dividend_warning": False,
+        }
+
+        row = build_candidate_rows(
+            [record]
+        )[0]
+
+        self.assertEqual(len(row), 51)
+        self.assertEqual(row[28], "completed")
+        self.assertEqual(row[29], "confirmed")
+        self.assertEqual(
+            row[30],
+            "累進配当の導入",
+        )
+        self.assertEqual(
+            row[31],
+            "累進配当の導入に関するお知らせ",
+        )
+        self.assertEqual(row[32], 1)
+        self.assertEqual(row[33], "v2")
+
+    def test_candidate_note_identifies_selected_decision(
+        self,
+    ) -> None:
         base = {
             "security_code": "1234",
             "company_name": "テスト",
             "tdnet_policy_candidate": False,
             "tdnet_dividend_warning": False,
         }
-        raw_row = build_candidate_rows([dict(base)])[0]
+
+        raw_row = build_candidate_rows(
+            [dict(base)]
+        )[0]
+
         adjusted_record = dict(base)
-        adjusted_record["is_adjustment_coverage_complete"] = True
-        adjusted_row = build_candidate_rows([adjusted_record])[0]
+        adjusted_record[
+            "is_adjustment_coverage_complete"
+        ] = True
 
-        self.assertEqual(raw_row[33], RAW_DIVIDEND_CAUTION)
-        self.assertEqual(raw_row[34], "raw")
-        self.assertEqual(adjusted_row[33], ADJUSTED_DIVIDEND_NOTE)
-        self.assertEqual(adjusted_row[34], "adjusted")
+        adjusted_row = build_candidate_rows(
+            [adjusted_record]
+        )[0]
 
+        self.assertEqual(
+            raw_row[39],
+            RAW_DIVIDEND_CAUTION,
+        )
+        self.assertEqual(
+            raw_row[40],
+            "raw",
+        )
+        self.assertEqual(
+            adjusted_row[39],
+            ADJUSTED_DIVIDEND_NOTE,
+        )
+        self.assertEqual(
+            adjusted_row[40],
+            "adjusted",
+        )
 
 class CandidateDecisionTest(unittest.TestCase):
     def setUp(self) -> None:
