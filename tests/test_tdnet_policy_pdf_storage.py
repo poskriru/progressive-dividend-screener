@@ -12,7 +12,6 @@ from datetime import date, time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-
 # ============================================================
 # テスト対象を読み込むためのパス設定
 # ============================================================
@@ -32,6 +31,7 @@ if str(SOURCE_DIRECTORY) not in sys.path:
 # ============================================================
 
 from analyze_tdnet_policy_pdfs import (  # noqa: E402
+    ANALYZER_VERSION,
     PolicyAnalysis,
     PolicyEvidence,
 )
@@ -483,7 +483,9 @@ class TdnetPolicyPdfTargetSelectionTest(
                         "140120260101000001"
                     ),
                     "analysis_status": "completed",
-                    "analyzer_version": "v1",
+                    "analyzer_version": (
+                        ANALYZER_VERSION
+                    ),
                     "fetch_attempt_count": 1,
                 }
             ]
@@ -519,7 +521,9 @@ class TdnetPolicyPdfTargetSelectionTest(
                     "analysis_status": (
                         "fetch_failed"
                     ),
-                    "analyzer_version": "v1",
+                    "analyzer_version": (
+                        ANALYZER_VERSION
+                    ),
                     "fetch_attempt_count": 2,
                 }
             ]
@@ -554,7 +558,9 @@ class TdnetPolicyPdfTargetSelectionTest(
                     "analysis_status": (
                         "text_extraction_failed"
                     ),
-                    "analyzer_version": "v1",
+                    "analyzer_version": (
+                        ANALYZER_VERSION
+                    ),
                     "fetch_attempt_count": 3,
                 }
             ]
@@ -589,7 +595,7 @@ class TdnetPolicyPdfTargetSelectionTest(
                         "140120260101000001"
                     ),
                     "analysis_status": "completed",
-                    "analyzer_version": "v0",
+                    "analyzer_version": "v1",
                     "fetch_attempt_count": 10,
                 }
             ]
