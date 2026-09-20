@@ -49,6 +49,7 @@ EXPECTED_TABLES = {
     "corporate_actions",
     "jquants_adjustment_sync_status",
     "jpx_corporate_action_source_files",
+    "tdnet_policy_pdf_analyses",
 }
 
 EXPECTED_VIEWS = {
