@@ -137,3 +137,11 @@ jobs:
       - name: TDnet配当関連開示を更新
         run: |
           python src/update_tdnet_dividend_disclosures.py
+      
+      # ======================================================
+      # 累進配当候補更新
+      # ======================================================
+
+      - name: 累進配当候補を更新
+        run: |
+          python src/export_progressive_dividend_candidates.py
