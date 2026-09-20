@@ -2,6 +2,7 @@
 
 import sys
 import unittest
+from decimal import Decimal
 from pathlib import Path
 
 
@@ -11,9 +12,10 @@ sys.path.insert(0, str(SRC_DIRECTORY))
 
 
 from export_progressive_dividend_candidates import (  # noqa: E402
+    CandidateCriteria,
+    build_discord_notification_description,
     build_tdnet_policy_discord_lines,
 )
-
 
 class TdnetPolicyCandidateNotificationTest(
     unittest.TestCase
@@ -170,6 +172,85 @@ class TdnetPolicyCandidateNotificationTest(
             120,
         )
 
+    def test_candidate_description_keeps_adjusted_label(
+        self,
+    ) -> None:
+        criteria = CandidateCriteria(
+            min_dividend_yield_percent=Decimal("3"),
+            max_payout_ratio_percent=Decimal("70"),
+            max_per_ratio=Decimal("25"),
+            max_pbr_ratio=Decimal("3"),
+            min_roe_percent=Decimal("8"),
+            require_positive_free_cash_flow=True,
+            max_candidates=300,
+        )
+        record = {
+            "security_code": "8057",
+            "company_name": "内田洋行",
+            "is_adjustment_coverage_complete": True,
+            "tdnet_policy_candidate": True,
+            "tdnet_dividend_warning": False,
+            "tdnet_policy_analysis_status": (
+                "completed"
+            ),
+            "tdnet_policy_classification": (
+                "confirmed"
+            ),
+            "tdnet_policy_matched_phrase": (
+                "累進配当の導入"
+            ),
+        }
+
+        description = (
+            build_discord_notification_description(
+                [record],
+                criteria,
+            )
+        )
+
+        self.assertIn(
+            (
+                "[TDnet方針候補 / "
+                "TDnet本文 confirmed] [adjusted]"
+            ),
+            description,
+        )
+        self.assertIn(
+            "TDnet本文判定: `confirmed`",
+            description,
+        )
+
+    def test_candidate_description_keeps_raw_label(
+        self,
+    ) -> None:
+        criteria = CandidateCriteria(
+            min_dividend_yield_percent=Decimal("3"),
+            max_payout_ratio_percent=Decimal("70"),
+            max_per_ratio=Decimal("25"),
+            max_pbr_ratio=Decimal("3"),
+            min_roe_percent=Decimal("8"),
+            require_positive_free_cash_flow=True,
+            max_candidates=300,
+        )
+        record = {
+            "security_code": "1234",
+            "company_name": "テスト会社",
+            "is_adjustment_coverage_complete": False,
+            "tdnet_policy_candidate": False,
+            "tdnet_dividend_warning": False,
+        }
+
+        description = (
+            build_discord_notification_description(
+                [record],
+                criteria,
+            )
+        )
+
+        self.assertIn(
+            "`1234` テスト会社 [raw]",
+            description,
+        )
 
 if __name__ == "__main__":
     unittest.main()
