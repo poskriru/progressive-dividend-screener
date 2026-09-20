@@ -610,6 +610,52 @@ class CandidateSearchMessageTests(unittest.TestCase):
             message,
         )
 
+        def test_empty_results_respect_custom_limit(
+        self,
+    ) -> None:
+        message = build_candidate_search_message(
+            [],
+            self.request,
+            max_chars=100,
+        )
+
+        self.assertLessEqual(
+            len(message),
+            100,
+        )
+        self.assertTrue(
+            message.endswith("…")
+        )
+
+    def test_long_condition_line_respects_limit(
+        self,
+    ) -> None:
+        request = CandidateSearchRequest(
+            min_dividend_yield_percent=Decimal(
+                "1" * 500
+            ),
+            max_payout_ratio_percent=Decimal("70"),
+            max_per_ratio=Decimal("25"),
+            max_pbr_ratio=Decimal("3"),
+            min_roe_percent=Decimal("8"),
+            require_positive_free_cash_flow=True,
+            max_results=10,
+        )
+
+        message = build_candidate_search_message(
+            [],
+            request,
+            max_chars=300,
+        )
+
+        self.assertLessEqual(
+            len(message),
+            300,
+        )
+        self.assertTrue(
+            message.endswith("…")
+        )
+
     def test_formatting_does_not_mutate_records(
         self,
     ) -> None:
