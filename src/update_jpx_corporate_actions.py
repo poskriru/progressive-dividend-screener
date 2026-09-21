@@ -2694,7 +2694,7 @@ def save_complete_jpx_coverage(
                             not in missing_security_codes
                         ]
 
-                    cursor.executemany(
+                cursor.executemany(
                     """
                     INSERT INTO
                         screener.jpx_corporate_action_source_files (
