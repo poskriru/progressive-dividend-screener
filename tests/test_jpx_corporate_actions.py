@@ -287,6 +287,26 @@ class JpxOtherActionParsingTest(unittest.TestCase):
             ),
         )
 
+    def test_stock_acquisition_rights_free_allotment_is_unsupported(
+        self,
+    ) -> None:
+        """新株予約権の無償割当ては比率なしでも種別3にする。"""
+
+        self.assertEqual(
+            parse_action_description(
+                (
+                    "5009 富士興産 "
+                    "FUJI KOSAN COMPANY,L TD. "
+                    "2021.07.29 2021.07.31 "
+                    "新株予約権の株主無償割当て"
+                )
+            ),
+            (
+                Decimal("1.0000000000"),
+                "3",
+            ),
+        )
+
     def test_paid_shareholder_allotment_is_unsupported(
         self,
     ) -> None:
