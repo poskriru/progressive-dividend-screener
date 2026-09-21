@@ -1,0 +1,5 @@
+# Discord API
+requests==2.32.4
+
+# PostgreSQL
+psycopg[binary]>=3.2,<4
