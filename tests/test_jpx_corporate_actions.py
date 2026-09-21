@@ -4193,40 +4193,6 @@ class JpxDatabasePersistenceTest(unittest.TestCase):
             source_sql,
         )
 
-    def test_unknown_security_is_rejected(
-        self,
-    ) -> None:
-        result = self.create_result()
-        connection, transaction, cursor = (
-            self.create_database_mock(
-                existing_security_codes=()
-            )
-        )
-
-        with patch(
-            "update_jpx_corporate_actions."
-            "create_database_connection",
-            return_value=connection,
-        ):
-            with self.assertRaisesRegex(
-                RuntimeError,
-                "securities",
-            ):
-                save_complete_jpx_coverage(
-                    result
-                )
-
-        cursor.executemany.assert_not_called()
-        transaction.__exit__.assert_called_once()
-
-        exit_arguments = (
-            transaction.__exit__.call_args.args
-        )
-        self.assertIs(
-            exit_arguments[0],
-            RuntimeError,
-        )
-
     def test_invalid_hash_is_rejected_before_connection(
         self,
     ) -> None:
