@@ -2198,12 +2198,6 @@ def download_and_parse_monthly_sources(
             )
 
         for action in parsed_pdf.actions:
-            if (
-                action.security_code
-                in missing_security_codes
-            ):
-                continue
-
             action_month = date(
                 action.effective_date.year,
                 action.effective_date.month,
@@ -2693,7 +2687,14 @@ def save_complete_jpx_coverage(
                             flush=True,
                         )
 
-                cursor.executemany(
+                        action_rows = [
+                            action_row
+                            for action_row in action_rows
+                            if action_row[0]
+                            not in missing_security_codes
+                        ]
+
+                    cursor.executemany(
                     """
                     INSERT INTO
                         screener.jpx_corporate_action_source_files (
