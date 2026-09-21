@@ -20,7 +20,7 @@ from typing import Any
 # プロジェクト内モジュール
 # ============================================================
 
-from export_progressive_dividend_candidates import (
+from discord_candidate_repository import (
     CandidateCriteria,
     enrich_candidate_records_with_latest_tdnet_policy_results,
     load_progressive_dividend_candidates,
