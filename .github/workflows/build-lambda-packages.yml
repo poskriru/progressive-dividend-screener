@@ -1,0 +1,344 @@
+name: LambdaデプロイZIP作成
+
+on:
+  push:
+    branches:
+      - feat/lambda-deployment-packages
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-lambda-packages-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-lambda-packages:
+    name: LambdaデプロイZIP作成
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      # ======================================================
+      # ソースコード取得
+      # ======================================================
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      # ======================================================
+      # Python環境
+      # ======================================================
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            lambda/receiver-requirements.txt
+            lambda/worker-requirements.txt
+
+      # ======================================================
+      # 作業ディレクトリ
+      # ======================================================
+      - name: Prepare build directories
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rm -rf build artifacts
+          mkdir -p \
+            build/receiver \
+            build/worker \
+            artifacts
+
+      # ======================================================
+      # Receiverパッケージ
+      # ======================================================
+      - name: Install Receiver dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python -m pip install \
+            --disable-pip-version-check \
+            --no-compile \
+            --upgrade \
+            --target build/receiver \
+            --platform manylinux2014_x86_64 \
+            --implementation cp \
+            --python-version 3.12 \
+            --only-binary=:all: \
+            -r lambda/receiver-requirements.txt
+
+      - name: Add Receiver source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cp \
+            src/discord_interactions.py \
+            build/receiver/lambda_function.py
+
+      # ======================================================
+      # Workerパッケージ
+      # ======================================================
+      - name: Install Worker dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python -m pip install \
+            --disable-pip-version-check \
+            --no-compile \
+            --upgrade \
+            --target build/worker \
+            --platform manylinux2014_x86_64 \
+            --implementation cp \
+            --python-version 3.12 \
+            --only-binary=:all: \
+            -r lambda/worker-requirements.txt
+
+      - name: Add Worker source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cp \
+            src/discord_candidate_search_worker.py \
+            build/worker/lambda_function.py
+
+          cp \
+            src/candidate_search.py \
+            src/discord_candidate_repository.py \
+            src/database.py \
+            src/enrich_tdnet_policy_candidates.py \
+            src/load_latest_tdnet_policy_results.py \
+            src/load_tdnet_policy_pdf_analyses.py \
+            build/worker/
+
+      # ======================================================
+      # import確認
+      # ======================================================
+      - name: Verify Receiver import
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PYTHONPATH="${GITHUB_WORKSPACE}/build/receiver" \
+            python -c \
+            "import lambda_function; assert callable(lambda_function.lambda_handler)"
+
+      - name: Verify Worker import
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PYTHONPATH="${GITHUB_WORKSPACE}/build/worker" \
+            python -c \
+            "import lambda_function; assert callable(lambda_function.lambda_handler)"
+
+      # ======================================================
+      # 不要ファイル除去
+      # ======================================================
+      - name: Remove build caches
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          find build \
+            -type d \
+            -name "__pycache__" \
+            -prune \
+            -exec rm -rf {} +
+
+          find build \
+            -type f \
+            \( -name "*.pyc" -o -name "*.pyo" \) \
+            -delete
+
+      # ======================================================
+      # 重い依存関係の混入確認
+      # ======================================================
+      - name: Verify lightweight Worker package
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          blocked_paths="$(
+            find build/worker \
+              -maxdepth 1 \
+              \( \
+                -name "pandas*" \
+                -o -name "numpy*" \
+                -o -name "pdfplumber*" \
+                -o -name "googleapiclient*" \
+                -o -name "google_api_python_client*" \
+              \) \
+              -print
+          )"
+
+          if [[ -n "${blocked_paths}" ]]; then
+            echo "Worker ZIPに不要な依存関係が含まれています。"
+            echo "${blocked_paths}"
+            exit 1
+          fi
+
+      # ======================================================
+      # パーミッション
+      # ======================================================
+      - name: Set package permissions
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          find build \
+            -type d \
+            -exec chmod 755 {} +
+
+          find build \
+            -type f \
+            -exec chmod 644 {} +
+
+      # ======================================================
+      # ZIP作成
+      # ======================================================
+      - name: Create deployment ZIP files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          (
+            cd build/receiver
+            zip -q -r -9 \
+              ../../artifacts/discord-interactions-receiver.zip \
+              .
+          )
+
+          (
+            cd build/worker
+            zip -q -r -9 \
+              ../../artifacts/discord-candidate-search-worker.zip \
+              .
+          )
+
+      # ======================================================
+      # ZIP構造確認
+      # ======================================================
+      - name: Verify ZIP structure
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          unzip -Z1 \
+            artifacts/discord-interactions-receiver.zip \
+            | grep -qx "lambda_function.py"
+
+          unzip -Z1 \
+            artifacts/discord-candidate-search-worker.zip \
+            | grep -qx "lambda_function.py"
+
+          unzip -t \
+            artifacts/discord-interactions-receiver.zip
+
+          unzip -t \
+            artifacts/discord-candidate-search-worker.zip
+
+      # ======================================================
+      # Lambdaサイズ上限確認
+      # ======================================================
+      - name: Verify package sizes
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          maximum_zip_bytes=$((50 * 1024 * 1024))
+          maximum_unzipped_bytes=$((250 * 1024 * 1024))
+
+          receiver_zip_bytes="$(
+            stat -c '%s' \
+              artifacts/discord-interactions-receiver.zip
+          )"
+          worker_zip_bytes="$(
+            stat -c '%s' \
+              artifacts/discord-candidate-search-worker.zip
+          )"
+
+          receiver_unzipped_bytes="$(
+            du -sb build/receiver | cut -f1
+          )"
+          worker_unzipped_bytes="$(
+            du -sb build/worker | cut -f1
+          )"
+
+          echo "Receiver ZIP: ${receiver_zip_bytes} bytes"
+          echo "Receiver展開後: ${receiver_unzipped_bytes} bytes"
+          echo "Worker ZIP: ${worker_zip_bytes} bytes"
+          echo "Worker展開後: ${worker_unzipped_bytes} bytes"
+
+          if (( receiver_zip_bytes >= maximum_zip_bytes )); then
+            echo "Receiver ZIPがコンソール直接アップロード上限以上です。"
+            exit 1
+          fi
+
+          if (( worker_zip_bytes >= maximum_zip_bytes )); then
+            echo "Worker ZIPがコンソール直接アップロード上限以上です。"
+            exit 1
+          fi
+
+          if (( receiver_unzipped_bytes >= maximum_unzipped_bytes )); then
+            echo "Receiver ZIPの展開後サイズがLambda上限以上です。"
+            exit 1
+          fi
+
+          if (( worker_unzipped_bytes >= maximum_unzipped_bytes )); then
+            echo "Worker ZIPの展開後サイズがLambda上限以上です。"
+            exit 1
+          fi
+
+      # ======================================================
+      # SHA-256
+      # ======================================================
+      - name: Create SHA-256 files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          (
+            cd artifacts
+            sha256sum \
+              discord-interactions-receiver.zip \
+              > discord-interactions-receiver.zip.sha256
+
+            sha256sum \
+              discord-candidate-search-worker.zip \
+              > discord-candidate-search-worker.zip.sha256
+          )
+
+          cat artifacts/*.sha256
+
+      # ======================================================
+      # Artifact保存
+      # ======================================================
+      - name: Upload Receiver package
+        uses: actions/upload-artifact@v4
+        with:
+          name: discord-interactions-receiver-package
+          path: |
+            artifacts/discord-interactions-receiver.zip
+            artifacts/discord-interactions-receiver.zip.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+      - name: Upload Worker package
+        uses: actions/upload-artifact@v4
+        with:
+          name: discord-candidate-search-worker-package
+          path: |
+            artifacts/discord-candidate-search-worker.zip
+            artifacts/discord-candidate-search-worker.zip.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
