@@ -1,0 +1,2 @@
+# Discord Ed25519署名検証
+PyNaCl==1.6.2
