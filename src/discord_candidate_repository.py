@@ -96,7 +96,7 @@ def load_progressive_dividend_candidates(
             adjusted_fiscal_periods_5y,
             adjusted_annual_dividends_yen_5y,
             financial_source_url
-        FROM screener.company_screener_with_dividends
+        FROM screener.discord_candidate_search_cache
         WHERE annual_financial_id IS NOT NULL
           AND close_price IS NOT NULL
           AND is_adjustment_coverage_complete IS TRUE
@@ -111,11 +111,8 @@ def load_progressive_dividend_candidates(
           AND (%s = FALSE OR free_cash_flow_jpy > 0)
         ORDER BY
             dividend_yield_percent DESC NULLS LAST,
-            CASE
-                WHEN is_adjustment_coverage_complete IS TRUE
-                THEN dividend_cagr_5y_adjusted_percent
-                ELSE dividend_cagr_5y_percent
-            END DESC NULLS LAST,
+            dividend_cagr_5y_adjusted_percent
+                DESC NULLS LAST,
             roe_percent DESC NULLS LAST,
             security_code
         LIMIT %s;
@@ -129,6 +126,11 @@ def load_progressive_dividend_candidates(
         criteria.min_roe_percent,
         criteria.require_positive_free_cash_flow,
         criteria.max_candidates,
+    )
+
+    print(
+        "Discord候補検索キャッシュを検索します。",
+        flush=True,
     )
 
     with create_database_connection(
@@ -160,11 +162,11 @@ def load_progressive_dividend_candidates(
     print(
         "PostgreSQLからDiscord用の"
         "累進配当候補を取得しました。"
-        f"件数: {len(records):,}"
+        f"件数: {len(records):,}",
+        flush=True,
     )
 
     return records
-
 
 # ============================================================
 # TDnet本文解析結果
