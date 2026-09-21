@@ -406,6 +406,25 @@ def parse_action_description(
         )
         return factor, "1"
 
+    # ========================================================
+    # 自動補正しない企業行動
+    # ========================================================
+
+    # 「新株予約権の株主無償割当て」は、
+    # 通常の株式そのものの無償割当てではない。
+    #
+    # 「株主無償割当て」という部分文字列にも一致するため、
+    # 通常の株主無償割当てより先に判定する。
+    #
+    # JPX資料に調整比率がない場合でも月全体を失敗させず、
+    # 自動補正対象外の企業行動として保存する。
+    if "新株予約権" in description:
+        return Decimal("1.0000000000"), "3"
+
+    # ========================================================
+    # 株式の無償割当て
+    # ========================================================
+
     # 株主無償割当ては、割当率が「既存株式:追加株式」で
     # 表記されるため、分割比率と同じ計算をしない。
     if "株主無償割当" in description:
@@ -421,12 +440,15 @@ def parse_action_description(
         )
         return factor, "1"
 
+    # ========================================================
+    # その他の自動補正対象外
+    # ========================================================
+
     # 有償の株主割当てや株式配当は、比率だけでは
     # 適切な調整係数を確定できないため自動補正しない。
     if (
         "株主割当" in description
         or "株式配当" in description
-        or "新株予約権" in description
     ):
         return Decimal("1.0000000000"), "3"
 
@@ -2176,6 +2198,12 @@ def download_and_parse_monthly_sources(
             )
 
         for action in parsed_pdf.actions:
+            if (
+                action.security_code
+                in missing_security_codes
+            ):
+                continue
+
             action_month = date(
                 action.effective_date.year,
                 action.effective_date.month,
@@ -2656,11 +2684,13 @@ def save_complete_jpx_coverage(
                     )
 
                     if missing_security_codes:
-                        raise RuntimeError(
-                            "JPX企業行動の銘柄が"
-                            "securitiesに存在しません。"
-                            f" missing="
-                            f"{sorted(missing_security_codes)}"
+                        print(
+                            "現在の銘柄マスターに存在しない"
+                            "過去銘柄を保存対象から除外します。"
+                            f" 件数={len(missing_security_codes)},"
+                            f" codes="
+                            f"{sorted(missing_security_codes)}",
+                            flush=True,
                         )
 
                 cursor.executemany(
