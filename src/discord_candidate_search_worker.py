@@ -44,7 +44,7 @@ from candidate_search import (
 # ============================================================
 
 LOGGER = logging.getLogger(__name__)
-
+LOGGER.setLevel(logging.INFO)
 
 # ============================================================
 # 定数

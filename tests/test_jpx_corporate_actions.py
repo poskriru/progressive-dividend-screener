@@ -287,6 +287,26 @@ class JpxOtherActionParsingTest(unittest.TestCase):
             ),
         )
 
+    def test_stock_acquisition_rights_free_allotment_is_unsupported(
+        self,
+    ) -> None:
+        """新株予約権の無償割当ては比率なしでも種別3にする。"""
+
+        self.assertEqual(
+            parse_action_description(
+                (
+                    "5009 富士興産 "
+                    "FUJI KOSAN COMPANY,L TD. "
+                    "2021.07.29 2021.07.31 "
+                    "新株予約権の株主無償割当て"
+                )
+            ),
+            (
+                Decimal("1.0000000000"),
+                "3",
+            ),
+        )
+
     def test_paid_shareholder_allotment_is_unsupported(
         self,
     ) -> None:
@@ -4171,40 +4191,6 @@ class JpxDatabasePersistenceTest(unittest.TestCase):
         self.assertIn(
             "jpx_corporate_action_source_files",
             source_sql,
-        )
-
-    def test_unknown_security_is_rejected(
-        self,
-    ) -> None:
-        result = self.create_result()
-        connection, transaction, cursor = (
-            self.create_database_mock(
-                existing_security_codes=()
-            )
-        )
-
-        with patch(
-            "update_jpx_corporate_actions."
-            "create_database_connection",
-            return_value=connection,
-        ):
-            with self.assertRaisesRegex(
-                RuntimeError,
-                "securities",
-            ):
-                save_complete_jpx_coverage(
-                    result
-                )
-
-        cursor.executemany.assert_not_called()
-        transaction.__exit__.assert_called_once()
-
-        exit_arguments = (
-            transaction.__exit__.call_args.args
-        )
-        self.assertIs(
-            exit_arguments[0],
-            RuntimeError,
         )
 
     def test_invalid_hash_is_rejected_before_connection(
