@@ -1152,6 +1152,265 @@ def save_financial_sheet_rows_to_database(
 
 
 # ============================================================
+# EDINET原本確認済み配当補正
+# ============================================================
+
+# EDINET CSVの配当factを既存ロジックで選択できなかった文書のうち、
+# EDINET有価証券報告書の原本で年間配当額を確認済みのもの。
+#
+# 種類株式の配当やBPSなどを誤って取得しないように、
+# doc_id、証券コード、決算期末日の3項目を照合してから補正する。
+#
+# dividend_element_idには、XBRL要素IDを偽装せず、
+# EDINET PDF原本による確認値であることが分かる識別子を保存する。
+VERIFIED_EDINET_DIVIDEND_OVERRIDES = {
+    "S100TJ8O": {
+        "security_code": "3063",
+        "fiscal_period_end": "2024-02-29",
+        "annual_dividend_yen": 3.0,
+    },
+    "S100VUQ2": {
+        "security_code": "3063",
+        "fiscal_period_end": "2025-02-28",
+        "annual_dividend_yen": 4.0,
+    },
+    "S100Y7CP": {
+        "security_code": "3063",
+        "fiscal_period_end": "2026-02-28",
+        "annual_dividend_yen": 4.0,
+    },
+    "S100G8TW": {
+        "security_code": "5981",
+        "fiscal_period_end": "2019-03-31",
+        "annual_dividend_yen": 40.0,
+    },
+    "S100J16P": {
+        "security_code": "5981",
+        "fiscal_period_end": "2020-03-31",
+        "annual_dividend_yen": 0.0,
+    },
+    "S100OHJ2": {
+        "security_code": "5981",
+        "fiscal_period_end": "2022-03-31",
+        "annual_dividend_yen": 20.0,
+    },
+    "S100R6Z0": {
+        "security_code": "5981",
+        "fiscal_period_end": "2023-03-31",
+        "annual_dividend_yen": 35.0,
+    },
+    "S100TTTU": {
+        "security_code": "5981",
+        "fiscal_period_end": "2024-03-31",
+        "annual_dividend_yen": 40.0,
+    },
+    "S100W5M9": {
+        "security_code": "5981",
+        "fiscal_period_end": "2025-03-31",
+        "annual_dividend_yen": 64.0,
+    },
+    "S100YJJW": {
+        "security_code": "5981",
+        "fiscal_period_end": "2026-03-31",
+        "annual_dividend_yen": 70.0,
+    },
+    "S100W9P7": {
+        "security_code": "6615",
+        "fiscal_period_end": "2025-03-31",
+        "annual_dividend_yen": 10.0,
+    },
+    "S100YK9A": {
+        "security_code": "6615",
+        "fiscal_period_end": "2026-03-31",
+        "annual_dividend_yen": 10.0,
+    },
+    "S100R8P0": {
+        "security_code": "8207",
+        "fiscal_period_end": "2023-03-31",
+        "annual_dividend_yen": 0.0,
+    },
+    "S100TRXO": {
+        "security_code": "8207",
+        "fiscal_period_end": "2024-03-31",
+        "annual_dividend_yen": 0.0,
+    },
+    "S100W77R": {
+        "security_code": "8207",
+        "fiscal_period_end": "2025-03-31",
+        "annual_dividend_yen": 0.0,
+    },
+    "S100YIGD": {
+        "security_code": "8207",
+        "fiscal_period_end": "2026-03-31",
+        "annual_dividend_yen": 0.0,
+    },
+}
+
+VERIFIED_DIVIDEND_ELEMENT_ID = (
+    "MANUAL_VERIFIED_EDINET_PDF"
+)
+
+
+def apply_verified_edinet_dividend_overrides(
+    headers: list[str],
+    rows: list[list[Any]],
+) -> list[list[Any]]:
+    """
+    EDINET原本で確認済みの配当額を財務行へ反映する。
+
+    doc_idだけでなく証券コードと決算期末日も照合し、
+    意図しない文書への補正を防止する。
+    """
+
+    normalized_headers = [
+        normalize_text(header)
+        for header in headers
+    ]
+
+    required_headers = [
+        "書類管理番号",
+        "証券コード",
+        "対象期間終了日",
+        "1株配当（円）",
+        "配当要素ID",
+    ]
+
+    missing_headers = [
+        header
+        for header in required_headers
+        if header not in normalized_headers
+    ]
+
+    if missing_headers:
+        raise RuntimeError(
+            "EDINET配当補正に必要な列がありません。"
+            f"不足列: {missing_headers}"
+        )
+
+    doc_id_index = normalized_headers.index(
+        "書類管理番号"
+    )
+    security_code_index = normalized_headers.index(
+        "証券コード"
+    )
+    fiscal_period_end_index = normalized_headers.index(
+        "対象期間終了日"
+    )
+    dividend_index = normalized_headers.index(
+        "1株配当（円）"
+    )
+    dividend_element_id_index = normalized_headers.index(
+        "配当要素ID"
+    )
+
+    corrected_rows: list[list[Any]] = []
+    corrected_count = 0
+
+    for original_row in rows:
+        row = list(original_row)
+
+        if len(row) < len(normalized_headers):
+            row.extend(
+                [""] * (
+                    len(normalized_headers)
+                    - len(row)
+                )
+            )
+
+        doc_id = normalize_text(
+            row[doc_id_index]
+        )
+
+        override = (
+            VERIFIED_EDINET_DIVIDEND_OVERRIDES.get(
+                doc_id
+            )
+        )
+
+        if override is None:
+            corrected_rows.append(row)
+            continue
+
+        actual_security_code = normalize_security_code(
+            row[security_code_index]
+        )
+        expected_security_code = normalize_security_code(
+            override["security_code"]
+        )
+
+        actual_fiscal_period_end = normalize_text(
+            row[fiscal_period_end_index]
+        )
+        expected_fiscal_period_end = normalize_text(
+            override["fiscal_period_end"]
+        )
+
+        if actual_security_code != expected_security_code:
+            raise RuntimeError(
+                "EDINET配当補正の証券コードが"
+                "一致しません。"
+                f"doc_id={doc_id}, "
+                f"期待値={expected_security_code}, "
+                f"実際値={actual_security_code}"
+            )
+
+        if (
+            actual_fiscal_period_end
+            != expected_fiscal_period_end
+        ):
+            raise RuntimeError(
+                "EDINET配当補正の決算期末日が"
+                "一致しません。"
+                f"doc_id={doc_id}, "
+                f"期待値={expected_fiscal_period_end}, "
+                f"実際値={actual_fiscal_period_end}"
+            )
+
+        previous_dividend = normalize_text(
+            row[dividend_index]
+        )
+        previous_element_id = normalize_text(
+            row[dividend_element_id_index]
+        )
+
+        row[dividend_index] = override[
+            "annual_dividend_yen"
+        ]
+        row[dividend_element_id_index] = (
+            VERIFIED_DIVIDEND_ELEMENT_ID
+        )
+
+        corrected_count += 1
+
+        print(
+            "EDINET原本確認済み配当を反映しました。"
+            f"doc_id={doc_id}, "
+            f"security_code={actual_security_code}, "
+            f"fiscal_period_end="
+            f"{actual_fiscal_period_end}, "
+            f"previous_dividend="
+            f"{previous_dividend or 'NULL'}, "
+            f"corrected_dividend="
+            f"{override['annual_dividend_yen']}, "
+            f"previous_element_id="
+            f"{previous_element_id or 'NULL'}, "
+            f"corrected_element_id="
+            f"{VERIFIED_DIVIDEND_ELEMENT_ID}"
+        )
+
+        corrected_rows.append(row)
+
+    if corrected_count:
+        print(
+            "EDINET原本確認済み配当の反映が"
+            "完了しました。"
+            f"補正件数: {corrected_count:,}"
+        )
+
+    return corrected_rows
+
+
+# ============================================================
 # シート書き込み
 # ============================================================
 
@@ -1166,10 +1425,16 @@ def write_sheet(
     Googleスプレッドシートを更新する。
 
     EDINET財務シートの場合は、
+    EDINET原本確認済み配当を反映した後、
     PostgreSQLへの保存成功後にシートを更新する。
     """
 
     if sheet_name == FINANCIAL_SHEET_NAME:
+        rows = apply_verified_edinet_dividend_overrides(
+            headers,
+            rows,
+        )
+
         database_count = (
             save_financial_sheet_rows_to_database(
                 headers,
@@ -1315,8 +1580,6 @@ def write_sheet(
         f"{sheet_name}シートを更新しました。"
         f"件数: {len(rows):,}"
     )
-
-
 
 # ============================================================
 # EDINET書類の読み込み
