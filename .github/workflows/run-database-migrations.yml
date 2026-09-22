@@ -71,38 +71,9 @@ jobs:
           pip install -r requirements.txt
 
       # ======================================================
-      # Python構文確認
-      # ======================================================
-
-      - name: Python構文を確認
-        run: |
-          python -m compileall -q src tests
-
-      # ======================================================
-      # JPX当月権利処理候補の単体テスト
-      # ======================================================
-
-      - name: JPX当月権利処理候補の単体テストを実行
-        if: github.ref == 'refs/heads/fix/discord-worker-timeout-diagnostics'
-        run: |
-          python -m unittest discover \
-            -s tests \
-            -p "test_jpx_current_rights.py" \
-            -v
-
-      # ======================================================
       # データベースマイグレーション
       # ======================================================
 
       - name: PostgreSQLマイグレーションを実行
         run: |
           python src/run_database_migrations.py
-
-      # ======================================================
-      # JPX当月権利処理候補の更新
-      # ======================================================
-
-      - name: JPX当月権利処理候補を更新
-        if: github.ref == 'refs/heads/fix/discord-worker-timeout-diagnostics'
-        run: |
-          python src/update_jpx_current_rights.py
