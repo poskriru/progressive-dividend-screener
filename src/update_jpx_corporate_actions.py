@@ -3057,7 +3057,9 @@ def main() -> None:
             "JPX月次企業行動の更新処理を"
             "開始または完了できませんでした。"
             f" エラー種別={type(error).__name__}",
+            f" エラー={error}",
             file=sys.stderr,
+            flush=True,
         )
 
         raise SystemExit(1) from error
