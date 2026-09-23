@@ -1179,6 +1179,11 @@ VERIFIED_EDINET_DIVIDEND_OVERRIDES = {
         "fiscal_period_end": "2026-02-28",
         "annual_dividend_yen": 4.0,
     },
+    "S100DF3M": {
+        "security_code": "5981",
+        "fiscal_period_end": "2018-03-31",
+        "annual_dividend_yen": 40.0,
+    },
     "S100G8TW": {
         "security_code": "5981",
         "fiscal_period_end": "2019-03-31",
