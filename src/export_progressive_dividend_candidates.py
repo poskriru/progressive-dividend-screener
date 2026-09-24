@@ -1819,6 +1819,81 @@ def build_tdnet_policy_discord_lines(
 
     return lines
 
+def normalize_exclusion_reason(
+    reason: str,
+) -> str:
+    """除外理由から数値付きの補足を取り除いて分類する。"""
+
+    text = reason.strip()
+
+    if (
+        text.endswith("）")
+        and "（" in text
+    ):
+        text = text[: text.index("（")].strip()
+
+    return text
+
+
+def summarize_exclusion_reasons(
+    removed_reasons: dict[str, tuple[str, ...]],
+    *,
+    max_categories: int = 5,
+) -> list[str]:
+    """除外理由を銘柄単位で集計し、内訳行を返す。"""
+
+    if max_categories < 1:
+        raise ValueError(
+            "内訳の表示種別数は1以上で指定してください。"
+        )
+
+    counts: dict[str, int] = {}
+
+    for reasons in removed_reasons.values():
+        seen_categories: set[str] = set()
+
+        for reason in reasons:
+            category = normalize_exclusion_reason(
+                str(reason)
+            )
+
+            if not category:
+                continue
+
+            if category in seen_categories:
+                continue
+
+            seen_categories.add(category)
+            counts[category] = (
+                counts.get(category, 0) + 1
+            )
+
+    if not counts:
+        return []
+
+    ordered_categories = sorted(
+        counts.items(),
+        key=lambda item: (-item[1], item[0]),
+    )
+    shown_categories = ordered_categories[
+        :max_categories
+    ]
+
+    summary = " / ".join(
+        f"{name} {count}件"
+        for name, count in shown_categories
+    )
+
+    remaining_count = (
+        len(ordered_categories) - len(shown_categories)
+    )
+
+    if remaining_count > 0:
+        summary += f" / ほか{remaining_count}種"
+
+    return [f"除外理由内訳: {summary}"]
+
+
 def build_discord_notification_description(
     records: list[dict[str, Any]],
     criteria: CandidateCriteria,
@@ -1874,6 +1949,11 @@ def build_discord_notification_description(
 
             lines.append(
                 "除外: " + ", ".join(removed_items)
+            )
+            lines.extend(
+                summarize_exclusion_reasons(
+                    removed_reasons
+                )
             )
     else:
         lines.append("前回比: **変更なし**")

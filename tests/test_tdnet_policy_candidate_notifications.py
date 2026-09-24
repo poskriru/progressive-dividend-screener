@@ -16,6 +16,8 @@ from export_progressive_dividend_candidates import (  # noqa: E402
     CandidateCriteria,
     build_discord_notification_description,
     build_tdnet_policy_discord_lines,
+    normalize_exclusion_reason,
+    summarize_exclusion_reasons,
 )
 
 class TdnetPolicyCandidateNotificationTest(
@@ -278,6 +280,136 @@ class TdnetPolicyCandidateNotificationTest(
             "[raw] — 利回り",
             description,
         )
+
+class ExclusionReasonSummaryTest(unittest.TestCase):
+    def test_numeric_suffix_is_removed(
+        self,
+    ) -> None:
+        self.assertEqual(
+            normalize_exclusion_reason(
+                "配当利回りが下限未満（4.20%）"
+            ),
+            "配当利回りが下限未満",
+        )
+        self.assertEqual(
+            normalize_exclusion_reason(
+                "PERが上限超過（30.00倍）"
+            ),
+            "PERが上限超過",
+        )
+
+    def test_plain_reason_is_kept(
+        self,
+    ) -> None:
+        self.assertEqual(
+            normalize_exclusion_reason(
+                "株式分割等補正データ不足"
+            ),
+            "株式分割等補正データ不足",
+        )
+
+    def test_reasons_are_counted_per_stock(
+        self,
+    ) -> None:
+        removed_reasons = {
+            "1111": (
+                "配当利回りが下限未満（2.10%）",
+                "ROEが下限未満（5.00%）",
+            ),
+            "2222": (
+                "配当利回りが下限未満（1.50%）",
+            ),
+        }
+
+        lines = summarize_exclusion_reasons(
+            removed_reasons
+        )
+
+        self.assertEqual(
+            lines,
+            [
+                "除外理由内訳: "
+                "配当利回りが下限未満 2件 / "
+                "ROEが下限未満 1件"
+            ],
+        )
+
+    def test_categories_are_limited(
+        self,
+    ) -> None:
+        removed_reasons = {
+            f"{index:04d}": (
+                f"理由{index}",
+            )
+            for index in range(7)
+        }
+
+        lines = summarize_exclusion_reasons(
+            removed_reasons,
+            max_categories=3,
+        )
+
+        self.assertEqual(
+            lines,
+            [
+                "除外理由内訳: "
+                "理由0 1件 / 理由1 1件 / 理由2 1件 / "
+                "ほか4種"
+            ],
+        )
+
+    def test_empty_reasons_return_no_lines(
+        self,
+    ) -> None:
+        self.assertEqual(
+            summarize_exclusion_reasons({}),
+            [],
+        )
+
+    def test_description_contains_summary(
+        self,
+    ) -> None:
+        criteria = CandidateCriteria(
+            min_dividend_yield_percent=Decimal("3"),
+            max_payout_ratio_percent=Decimal("70"),
+            max_per_ratio=Decimal("25"),
+            max_pbr_ratio=Decimal("3"),
+            min_roe_percent=Decimal("8"),
+            require_positive_free_cash_flow=True,
+            max_candidates=300,
+        )
+        record = {
+            "security_code": "1234",
+            "company_name": "テスト会社",
+            "is_adjustment_coverage_complete": False,
+        }
+        changes = CandidateChanges(
+            comparison_id="summary-test",
+            is_first_export=False,
+            added_candidates=(),
+            removed_candidates=(
+                ("1234", "テスト会社"),
+            ),
+        )
+
+        description = (
+            build_discord_notification_description(
+                [],
+                criteria,
+                changes,
+                {
+                    "1234": (
+                        "配当利回りが下限未満（2.10%）",
+                    ),
+                },
+            )
+        )
+
+        self.assertIn(
+            "除外理由内訳: 配当利回りが下限未満 1件",
+            description,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
