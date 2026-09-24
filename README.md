@@ -23,6 +23,7 @@
 - PDF本文解析結果を「累進配当候補」シートとDiscord通知へ反映
 - Discord Webhookへ候補銘柄とTDnet新着開示を通知
 - Discordから条件を指定して累進配当候補を検索
+- データの鮮度と整合を毎日チェックし、異常をDiscordへ通知
 - GitHub Actionsによる手動・定期実行
 
 ## 累進配当候補の抽出条件
@@ -125,6 +126,24 @@ GitHub Actionsの「J-Quants株式分割・併合情報の更新」ワークフ�
 発行条件により1株価値への影響が異なるため自動補正せず、該当銘柄は
 `unsupported_corporate_action`として候補から除外されます。配当継続性は
 一次資料で確認してください。
+
+## データ整合性チェック
+
+毎日10時に`run_data_health_check.py`がPostgreSQLのデータ鮮度と整合を
+確認し、結果をDiscordへ通知します。
+
+| チェック項目 | 内容 | 既定のしきい値 |
+|---|---|---:|
+| 株価 | `daily_prices`の最新取引日からの経過日数 | 5日 |
+| Discordキャッシュ | キャッシュの株価基準日が株価より古くないか | - |
+| EDINET書類 | 最新の提出日時からの経過日数 | 4日 |
+| 年次財務 | 最新の決算期末日からの経過日数 | 400日 |
+| 自動補正対象外アクション | 件数の報告（ライツイシュー等確認対象シートを案内） | - |
+
+しきい値は環境変数`HEALTH_CHECK_MAX_PRICE_AGE_DAYS`、
+`HEALTH_CHECK_MAX_FINANCIAL_AGE_DAYS`、
+`HEALTH_CHECK_MAX_EDINET_AGE_DAYS`で変更できます。
+警告がある場合はDiscord通知が赤色になります。
 
 ## TDnet配当関連開示・PDF本文解析
 
