@@ -2447,6 +2447,17 @@ def main() -> None:
         spreadsheet_id,
     )
 
+    # ライツイシュー等の自動補正対象外アクションも同時に出力し、
+    # 補正データ不足による候補除外の理由を確認できるようにする。
+    from export_unsupported_corporate_actions import (
+        export_unsupported_corporate_actions,
+    )
+
+    export_unsupported_corporate_actions(
+        sheets_service,
+        spreadsheet_id,
+    )
+
 
 # ============================================================
 # エントリーポイント
