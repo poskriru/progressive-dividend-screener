@@ -151,7 +151,15 @@ class BuildRowsTests(unittest.TestCase):
         self.assertEqual(row[1], "8057")
         self.assertEqual(row[2], "内田洋行")
         self.assertEqual(row[3], "プライム")
-        self.assertEqual(row[4], "2026-02-01")
+        self.assertEqual(
+            row[4],
+            float(
+                (
+                    date(2026, 2, 1)
+                    - date(1899, 12, 30)
+                ).days
+            ),
+        )
         self.assertEqual(row[5], "ライツイシュー")
         self.assertEqual(row[6], 0.833333)
         self.assertEqual(row[7], "J-Quants V2")

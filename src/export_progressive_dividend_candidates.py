@@ -32,10 +32,15 @@ from database import create_database_connection
 from export_database_indicators import (
     format_dividend_history,
     to_sheet_boolean,
-    to_sheet_date,
     to_sheet_integer,
     to_sheet_number,
     yen_to_sheet_million,
+)
+
+from sheets_column_formatting import (
+    apply_column_formats,
+    column_formats_from_headers,
+    to_sheet_serial_value,
 )
 
 from update_edinet_financials import (
@@ -158,6 +163,39 @@ CANDIDATE_HEADERS = [
     "調整済み累進配当判定状態",
     "5期調整済み配当履歴",
 ]
+
+CANDIDATE_COLUMN_FORMATS_BY_HEADER: dict[str, str] = {
+    "更新日時": "yyyy-mm-dd hh:mm:ss",
+    "株価基準日": "yyyy-mm-dd",
+    "TDnet最新方針開示日": "yyyy-mm-dd",
+    "TDnet最新配当開示日": "yyyy-mm-dd",
+    "順位": "#,##0",
+    "終値": "0.##",
+    "配当利回り（%）": "0.00",
+    "配当性向（%）": "0.00",
+    "PER（倍）": "0.##",
+    "PBR（倍）": "0.##",
+    "ROE（%）": "0.00",
+    "自己資本比率（%）": "0.00",
+    "フリーCF（百万円）": "#,##0.0",
+    "5期配当CAGR（%）": "0.00",
+    "5期増配回数": "#,##0",
+    "5期据え置き回数": "#,##0",
+    "連続非減配期数": "#,##0",
+    "連続増配期数": "#,##0",
+    "最新年間配当（円）": "0.##",
+    "5期最古年間配当（円）": "0.##",
+    "最新累積補正係数": "0.########",
+    "5期最古累積補正係数": "0.########",
+    "5期調整済み配当CAGR（%）": "0.00",
+}
+
+CANDIDATE_COLUMN_FORMATS = (
+    column_formats_from_headers(
+        CANDIDATE_HEADERS,
+        CANDIDATE_COLUMN_FORMATS_BY_HEADER,
+    )
+)
 
 DEFAULT_MIN_DIVIDEND_YIELD_PERCENT = Decimal("3.0")
 DEFAULT_MAX_PAYOUT_RATIO_PERCENT = Decimal("70.0")
@@ -797,8 +835,8 @@ def build_candidate_rows(
 ) -> list[list[Any]]:
     """候補レコードをGoogle Sheetsの列順へ変換する。"""
 
-    updated_at = datetime.now(JST).strftime(
-        "%Y-%m-%d %H:%M:%S"
+    updated_at = to_sheet_serial_value(
+        datetime.now(JST)
     )
     rows: list[list[Any]] = []
 
@@ -809,7 +847,7 @@ def build_candidate_rows(
         row = [
             updated_at,
             rank,
-            to_sheet_date(
+            to_sheet_serial_value(
                 record.get("trading_date")
             ),
             str(
@@ -2501,6 +2539,19 @@ def main() -> None:
         CANDIDATE_SHEET_NAME,
         CANDIDATE_HEADERS,
         candidate_rows,
+    )
+
+    candidate_sheet_id = get_or_create_sheet(
+        sheets_service,
+        spreadsheet_id,
+        CANDIDATE_SHEET_NAME,
+    )
+
+    apply_column_formats(
+        sheets_service,
+        spreadsheet_id,
+        candidate_sheet_id,
+        CANDIDATE_COLUMN_FORMATS,
     )
 
     print(
