@@ -43,6 +43,8 @@ jobs:
 
       DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
 
+      DATABASE_STATEMENT_TIMEOUT_MILLISECONDS: "600000"
+
       EDINET_API_KEY: ${{ secrets.EDINET_API_KEY }}
 
       MAX_DOCUMENTS: ${{ github.event.inputs.max_documents || '500' }}
