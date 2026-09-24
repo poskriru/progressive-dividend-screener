@@ -466,6 +466,40 @@ def format_search_decimal(
     return f"{number:.2f}{suffix}"
 
 
+def format_search_yen(value: Any) -> str:
+    """円単位の値を不要な末尾ゼロなしで表示する。"""
+
+    if value is None:
+        return "-"
+
+    try:
+        number = Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return "-"
+
+    if not number.is_finite():
+        return "-"
+
+    return format(number.normalize(), "f")
+
+
+def get_latest_adjusted_annual_dividend(
+    record: Mapping[str, Any],
+) -> Any:
+    """調整後5期配当履歴から最新期の年間配当を取得する。"""
+
+    dividends = record.get("adjusted_annual_dividends_yen_5y")
+
+    if (
+        not isinstance(dividends, Sequence)
+        or isinstance(dividends, (str, bytes))
+        or not dividends
+    ):
+        return None
+
+    return dividends[-1]
+
+
 def build_candidate_search_condition_line(
     request: CandidateSearchRequest,
 ) -> str:
@@ -549,12 +583,21 @@ def build_candidate_search_result_line(
         record.get("dividend_cagr_5y_adjusted_percent"),
         suffix="%",
     )
+    payout_ratio = format_search_decimal(
+        record.get("payout_ratio_percent"),
+        suffix="%",
+    )
+    latest_annual_dividend = format_search_yen(
+        get_latest_adjusted_annual_dividend(record)
+    )
 
     return (
         f"{rank}. `{security_code}` {company_name} "
         f"{marker_text} — "
         f"利回り {dividend_yield}"
         f" / 5期CAGR {dividend_cagr}"
+        f" / 年間配当 {latest_annual_dividend}円"
+        f" / 配当性向 {payout_ratio}"
         f" / PER {per_ratio}"
         f" / PBR {pbr_ratio}"
         f" / ROE {roe_percent}"

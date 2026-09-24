@@ -41,10 +41,21 @@ def build_candidate_record(
     pbr_ratio: Decimal | None = Decimal("1.20"),
     roe_percent: Decimal | None = Decimal("10.50"),
     dividend_cagr_5y_adjusted_percent: Decimal | None = Decimal("12.34"),
+    payout_ratio_percent: Decimal | None = Decimal("45.60"),
+    adjusted_annual_dividends_yen_5y: list[Decimal] | None = None,
     adjusted: bool = True,
     tdnet_classification: str | None = None,
 ) -> dict[str, object]:
     """検索結果表示用の候補レコードを作成する。"""
+
+    if adjusted_annual_dividends_yen_5y is None:
+        adjusted_annual_dividends_yen_5y = [
+            Decimal("100"),
+            Decimal("110"),
+            Decimal("120"),
+            Decimal("130"),
+            Decimal("150"),
+        ]
 
     return {
         "security_code": security_code,
@@ -53,8 +64,12 @@ def build_candidate_record(
         "per_ratio": per_ratio,
         "pbr_ratio": pbr_ratio,
         "roe_percent": roe_percent,
+        "payout_ratio_percent": payout_ratio_percent,
         "dividend_cagr_5y_adjusted_percent": (
             dividend_cagr_5y_adjusted_percent
+        ),
+        "adjusted_annual_dividends_yen_5y": (
+            adjusted_annual_dividends_yen_5y
         ),
         "is_adjustment_coverage_complete": adjusted,
         "tdnet_policy_classification": (
@@ -606,6 +621,56 @@ class CandidateSearchMessageTests(unittest.TestCase):
         )
 
         self.assertIn("5期CAGR 12.34%", result_line)
+
+    def test_latest_adjusted_dividend_and_payout_ratio_are_shown(
+        self,
+    ) -> None:
+        record = build_candidate_record(
+            payout_ratio_percent=Decimal("45.60"),
+            adjusted_annual_dividends_yen_5y=[
+                Decimal("80"),
+                Decimal("90"),
+                Decimal("100"),
+                Decimal("110"),
+                Decimal("125.5"),
+            ],
+        )
+
+        message = build_candidate_search_message(
+            [record],
+            self.request,
+        )
+
+        result_line = next(
+            line
+            for line in message.splitlines()
+            if "`8057`" in line
+        )
+
+        self.assertIn("年間配当 125.5円", result_line)
+        self.assertIn("配当性向 45.60%", result_line)
+
+    def test_missing_adjusted_dividend_history_is_displayed_as_dash(
+        self,
+    ) -> None:
+        record = build_candidate_record(
+            adjusted_annual_dividends_yen_5y=[],
+            payout_ratio_percent=None,
+        )
+
+        message = build_candidate_search_message(
+            [record],
+            self.request,
+        )
+
+        result_line = next(
+            line
+            for line in message.splitlines()
+            if "`8057`" in line
+        )
+
+        self.assertIn("年間配当 -円", result_line)
+        self.assertIn("配当性向 -", result_line)
 
     def test_missing_dividend_metrics_are_displayed_as_hyphens(
         self,
