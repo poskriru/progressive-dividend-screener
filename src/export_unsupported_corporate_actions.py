@@ -24,13 +24,19 @@ from typing import Any
 from database import create_database_connection
 
 from export_database_indicators import (
-    to_sheet_date,
     to_sheet_number,
+)
+
+from sheets_column_formatting import (
+    apply_column_formats,
+    column_formats_from_headers,
+    to_sheet_serial_value,
 )
 
 from update_edinet_financials import (
     JST,
     create_google_sheets_service,
+    get_or_create_sheet,
     get_required_environment_variable,
     write_sheet,
 )
@@ -56,6 +62,17 @@ UNSUPPORTED_CORPORATE_ACTION_HEADERS = [
     "補正状態",
     "確認事項",
 ]
+
+UNSUPPORTED_CORPORATE_ACTION_COLUMN_FORMATS = (
+    column_formats_from_headers(
+        UNSUPPORTED_CORPORATE_ACTION_HEADERS,
+        {
+            "更新日時": "yyyy-mm-dd hh:mm:ss",
+            "権利落ち日": "yyyy-mm-dd",
+            "調整係数": "0.######",
+        },
+    )
+)
 
 UNSUPPORTED_ACTION_CAUTION = (
     "自動配当補正の対象外です。ライツイシュー・第三者割当等は"
@@ -185,8 +202,8 @@ def build_unsupported_corporate_action_rows(
 ) -> list[list[Any]]:
     """確認対象をGoogle Sheetsの列順へ変換する。"""
 
-    updated_at = datetime.now(JST).strftime(
-        "%Y-%m-%d %H:%M:%S"
+    updated_at = to_sheet_serial_value(
+        datetime.now(JST)
     )
     rows: list[list[Any]] = []
 
@@ -196,7 +213,7 @@ def build_unsupported_corporate_action_rows(
             str(record.get("security_code", "")),
             str(record.get("company_name", "") or ""),
             str(record.get("market", "") or ""),
-            to_sheet_date(
+            to_sheet_serial_value(
                 record.get("effective_date")
             ),
             classify_ex_right_type(
@@ -256,6 +273,19 @@ def export_unsupported_corporate_actions(
         UNSUPPORTED_CORPORATE_ACTION_SHEET_NAME,
         UNSUPPORTED_CORPORATE_ACTION_HEADERS,
         rows,
+    )
+
+    sheet_id = get_or_create_sheet(
+        sheets_service,
+        spreadsheet_id,
+        UNSUPPORTED_CORPORATE_ACTION_SHEET_NAME,
+    )
+
+    apply_column_formats(
+        sheets_service,
+        spreadsheet_id,
+        sheet_id,
+        UNSUPPORTED_CORPORATE_ACTION_COLUMN_FORMATS,
     )
 
     print(

@@ -24,14 +24,20 @@ from typing import Any
 from database import create_database_connection
 
 from export_database_indicators import (
-    to_sheet_date,
     to_sheet_integer,
     to_sheet_number,
+)
+
+from sheets_column_formatting import (
+    apply_column_formats,
+    column_formats_from_headers,
+    to_sheet_serial_value,
 )
 
 from update_edinet_financials import (
     JST,
     create_google_sheets_service,
+    get_or_create_sheet,
     get_required_environment_variable,
     write_sheet,
 )
@@ -63,6 +69,23 @@ CORPORATE_ACTION_CANDIDATE_HEADERS = [
     "旧EDINET閲覧URL",
     "新EDINET閲覧URL",
 ]
+
+CORPORATE_ACTION_CANDIDATE_COLUMN_FORMATS = (
+    column_formats_from_headers(
+        CORPORATE_ACTION_CANDIDATE_HEADERS,
+        {
+            "更新日時": "yyyy-mm-dd hh:mm:ss",
+            "旧決算期末日": "yyyy-mm-dd",
+            "新決算期末日": "yyyy-mm-dd",
+            "旧発行済株式数": "#,##0",
+            "新発行済株式数": "#,##0",
+            "株式数変動倍率": "0.########",
+            "旧年間配当（円）": "0.##",
+            "新年間配当（円）": "0.##",
+            "新旧配当倍率": "0.########",
+        },
+    )
+)
 
 MINIMUM_SHARE_INCREASE_RATIO = Decimal("1.5")
 MAXIMUM_SHARE_DECREASE_RATIO = Decimal("0.67")
@@ -269,8 +292,8 @@ def build_corporate_action_candidate_rows(
 ) -> list[list[Any]]:
     """確認対象をGoogle Sheetsの列順へ変換する。"""
 
-    updated_at = datetime.now(JST).strftime(
-        "%Y-%m-%d %H:%M:%S"
+    updated_at = to_sheet_serial_value(
+        datetime.now(JST)
     )
     rows: list[list[Any]] = []
 
@@ -283,10 +306,10 @@ def build_corporate_action_candidate_rows(
             classify_share_change(
                 record.get("share_change_ratio")
             ),
-            to_sheet_date(
+            to_sheet_serial_value(
                 record.get("previous_fiscal_period_end")
             ),
-            to_sheet_date(
+            to_sheet_serial_value(
                 record.get("fiscal_period_end")
             ),
             to_sheet_integer(
@@ -359,6 +382,19 @@ def export_corporate_action_candidates(
         CORPORATE_ACTION_CANDIDATE_SHEET_NAME,
         CORPORATE_ACTION_CANDIDATE_HEADERS,
         rows,
+    )
+
+    sheet_id = get_or_create_sheet(
+        sheets_service,
+        spreadsheet_id,
+        CORPORATE_ACTION_CANDIDATE_SHEET_NAME,
+    )
+
+    apply_column_formats(
+        sheets_service,
+        spreadsheet_id,
+        sheet_id,
+        CORPORATE_ACTION_CANDIDATE_COLUMN_FORMATS,
     )
 
     print(

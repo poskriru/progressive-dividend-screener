@@ -121,6 +121,22 @@ def parse_iso_datetime_text(
 # 列書式リクエスト
 # ============================================================
 
+def column_formats_from_headers(
+    headers: list[str],
+    formats_by_header: dict[str, str],
+) -> dict[int, str]:
+    """ヘッダーと列名→書式の辞書から列番号→書式を作る。"""
+
+    return {
+        index: format_pattern
+        for index, header in enumerate(headers)
+        if (
+            format_pattern
+            := formats_by_header.get(header)
+        )
+    }
+
+
 def build_column_format_requests(
     sheet_id: int,
     column_formats: dict[int, str],
