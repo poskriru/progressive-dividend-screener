@@ -24,6 +24,8 @@ from database import (
     verify_required_tables,
 )
 
+from update_stock_prices import send_discord_notification
+
 
 # ============================================================
 # 定数
@@ -34,6 +36,8 @@ REQUIRED_TABLES = {
     "edinet_documents",
     "securities",
 }
+
+MAX_DISCORD_CANDIDATE_LINES = 10
 
 
 # ============================================================
@@ -340,6 +344,101 @@ def load_progressive_candidates(
 
 
 # ============================================================
+# Discord通知サマリー
+# ============================================================
+
+def build_diagnosis_discord_summary(
+    summary: dict[str, Any],
+    duplicate_summary: dict[str, Any],
+    history_coverage: list[dict[str, Any]],
+    candidate_count: int,
+    *,
+    candidate_output_limit: int = 50,
+) -> tuple[str, str, bool]:
+    """診断結果からDiscord通知の題目・本文・成否を作成する。"""
+
+    annual_financial_count = int(
+        summary.get("annual_financial_count") or 0
+    )
+    dividend_record_count = int(
+        summary.get("dividend_record_count") or 0
+    )
+    negative_dividend_count = int(
+        summary.get("negative_dividend_count") or 0
+    )
+    duplicate_period_count = int(
+        duplicate_summary.get("duplicate_period_count")
+        or 0
+    )
+    affected_security_count = int(
+        duplicate_summary.get("affected_security_count")
+        or 0
+    )
+
+    has_warnings = (
+        negative_dividend_count > 0
+        or duplicate_period_count > 0
+    )
+
+    lines = [
+        f"年次財務レコード: {annual_financial_count:,}件",
+        f"配当レコード: {dividend_record_count:,}件",
+        f"ゼロ配当: {int(summary.get('zero_dividend_count') or 0):,}件",
+        f"負の配当: {negative_dividend_count:,}件",
+        f"同一決算期の重複: {duplicate_period_count:,}件"
+        f"（{affected_security_count:,}銘柄）",
+        f"5期累進配当候補: {candidate_count:,}件"
+        f"（出力上限{candidate_output_limit}件）",
+    ]
+
+    if history_coverage:
+        coverage_texts = [
+            f"{int(entry.get('dividend_period_count') or 0)}期:"
+            f"{int(entry.get('security_count') or 0):,}銘柄"
+            for entry in history_coverage[
+                -MAX_DISCORD_CANDIDATE_LINES:
+            ]
+        ]
+        lines.append(
+            "配当履歴年数分布: " + ", ".join(coverage_texts)
+        )
+
+    title = (
+        "配当履歴診断で問題を検出しました"
+        if has_warnings
+        else "配当履歴診断は正常です"
+    )
+
+    return title, "\n".join(lines), not has_warnings
+
+
+def notify_diagnosis_summary(
+    summary: dict[str, Any],
+    duplicate_summary: dict[str, Any],
+    history_coverage: list[dict[str, Any]],
+    candidate_count: int,
+) -> None:
+    """診断サマリーをDiscordへ通知する。"""
+
+    title, description, success = (
+        build_diagnosis_discord_summary(
+            summary,
+            duplicate_summary,
+            history_coverage,
+            candidate_count,
+        )
+    )
+
+    send_discord_notification(
+        title,
+        description,
+        success=success,
+    )
+
+    print("配当履歴診断のDiscord通知処理を実行しました。")
+
+
+# ============================================================
 # メイン処理
 # ============================================================
 
@@ -406,6 +505,13 @@ def main() -> None:
             "5期累進配当候補",
             candidate,
         )
+
+    notify_diagnosis_summary(
+        summary,
+        duplicate_summary,
+        history_coverage,
+        len(progressive_candidates),
+    )
 
     print("年間配当履歴の診断が完了しました。")
 
