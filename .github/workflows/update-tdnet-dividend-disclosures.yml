@@ -68,6 +68,8 @@ jobs:
       DISCORD_WEBHOOK_URL: >-
         ${{ secrets.DISCORD_WEBHOOK_URL }}
 
+      DATABASE_STATEMENT_TIMEOUT_MILLISECONDS: "600000"
+
       TDNET_LOOKBACK_DAYS: >-
         ${{ github.event.inputs.lookback_days || '3' }}
 
