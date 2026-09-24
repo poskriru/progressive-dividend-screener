@@ -5,7 +5,14 @@ name: 年間配当履歴の診断
 # ============================================================
 
 on:
+  # GitHub Actions画面から手動実行できます。
   workflow_dispatch:
+
+  # 毎週日曜日の日本時間9時に実行します。
+  # GitHub ActionsのcronはUTCです。
+  # UTC 0:00 = 日本時間 9:00
+  schedule:
+    - cron: "0 0 * * 0"
 
 
 # ============================================================
@@ -38,6 +45,7 @@ jobs:
     env:
       TZ: Asia/Tokyo
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
 
     steps:
       # ======================================================
