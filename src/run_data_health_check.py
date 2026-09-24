@@ -1,8 +1,8 @@
 """
 PostgreSQLへ保存されたデータの鮮度と整合を確認する。
 
-株価・EDINET書類・年次財務の最新日付、
-Discord候補検索キャッシュの整合を集計し、
+株価・EDINET書類・年次財務・TDnet開示の最新日付、
+Discord候補検索キャッシュの整合、TDnet未完了解析を集計し、
 しきい値を超えた項目はDiscordへ警告する。
 """
 
@@ -42,9 +42,14 @@ MAX_EDINET_AGE_DAYS_ENV = (
     "HEALTH_CHECK_MAX_EDINET_AGE_DAYS"
 )
 
+MAX_TDNET_AGE_DAYS_ENV = (
+    "HEALTH_CHECK_MAX_TDNET_AGE_DAYS"
+)
+
 DEFAULT_MAX_PRICE_AGE_DAYS = 5
 DEFAULT_MAX_FINANCIAL_AGE_DAYS = 400
 DEFAULT_MAX_EDINET_AGE_DAYS = 4
+DEFAULT_MAX_TDNET_AGE_DAYS = 5
 
 MAX_AGE_DAYS_LIMIT = 3650
 
@@ -198,6 +203,25 @@ def evaluate_unsupported_actions(
     )
 
 
+def evaluate_tdnet_incomplete_analyses(
+    incomplete_count: Any,
+) -> str:
+    """TDnet PDF解析の未完了件数を評価する。"""
+
+    count = int(incomplete_count or 0)
+
+    if count > 0:
+        return (
+            f"{WARNING_PREFIX} TDnet未完了解析: "
+            f"{count:,}件"
+            "（pending/fetch_failed/text_extraction_failed）"
+        )
+
+    return (
+        f"{OK_PREFIX} TDnet未完了解析: 0件"
+    )
+
+
 # ============================================================
 # メトリクス取得
 # ============================================================
@@ -257,6 +281,19 @@ def load_health_metrics() -> dict[str, Any]:
             FROM screener.edinet_documents
             """
         ),
+        "latest_tdnet_published_date": (
+            """
+            SELECT MAX(published_date)
+            FROM screener.tdnet_policy_pdf_analyses
+            """
+        ),
+        "tdnet_incomplete_analysis_count": (
+            """
+            SELECT COUNT(*)
+            FROM screener.tdnet_policy_pdf_analyses
+            WHERE analysis_status <> 'completed'
+            """
+        ),
         "unsupported_action_count": (
             """
             SELECT COUNT(*)
@@ -306,6 +343,7 @@ def build_health_report(
     max_price_age_days: int,
     max_financial_age_days: int,
     max_edinet_age_days: int,
+    max_tdnet_age_days: int,
 ) -> tuple[list[str], bool]:
     """メトリクスから結果行と警告有無を返す。"""
 
@@ -327,6 +365,12 @@ def build_health_report(
             max_edinet_age_days,
         ),
         evaluate_age_check(
+            "TDnet開示",
+            metrics.get("latest_tdnet_published_date"),
+            today,
+            max_tdnet_age_days,
+        ),
+        evaluate_age_check(
             "年次財務",
             metrics.get("latest_fiscal_period_end"),
             today,
@@ -334,6 +378,9 @@ def build_health_report(
         ),
         evaluate_unsupported_actions(
             metrics.get("unsupported_action_count")
+        ),
+        evaluate_tdnet_incomplete_analyses(
+            metrics.get("tdnet_incomplete_analysis_count")
         ),
         (
             f"{OK_PREFIX} 有効銘柄数: "
@@ -384,6 +431,10 @@ def run_data_health_check() -> None:
         MAX_EDINET_AGE_DAYS_ENV,
         DEFAULT_MAX_EDINET_AGE_DAYS,
     )
+    max_tdnet_age_days = get_positive_age_days(
+        MAX_TDNET_AGE_DAYS_ENV,
+        DEFAULT_MAX_TDNET_AGE_DAYS,
+    )
 
     metrics = load_health_metrics()
 
@@ -393,6 +444,7 @@ def run_data_health_check() -> None:
         max_price_age_days=max_price_age_days,
         max_financial_age_days=max_financial_age_days,
         max_edinet_age_days=max_edinet_age_days,
+        max_tdnet_age_days=max_tdnet_age_days,
     )
 
     for line in lines:

@@ -137,12 +137,15 @@ GitHub Actionsの「J-Quants株式分割・併合情報の更新」ワークフ�
 | 株価 | `daily_prices`の最新取引日からの経過日数 | 5日 |
 | Discordキャッシュ | キャッシュの株価基準日が株価より古くないか | - |
 | EDINET書類 | 最新の提出日時からの経過日数 | 4日 |
+| TDnet開示 | 最新の開示日からの経過日数 | 5日 |
 | 年次財務 | 最新の決算期末日からの経過日数 | 400日 |
 | 自動補正対象外アクション | 件数の報告（ライツイシュー等確認対象シートを案内） | - |
+| TDnet未完了解析 | `pending`/`fetch_failed`/`text_extraction_failed`の解析件数（1件以上で警告） | - |
 
 しきい値は環境変数`HEALTH_CHECK_MAX_PRICE_AGE_DAYS`、
 `HEALTH_CHECK_MAX_FINANCIAL_AGE_DAYS`、
-`HEALTH_CHECK_MAX_EDINET_AGE_DAYS`で変更できます。
+`HEALTH_CHECK_MAX_EDINET_AGE_DAYS`、
+`HEALTH_CHECK_MAX_TDNET_AGE_DAYS`で変更できます。
 警告がある場合はDiscord通知が赤色になります。
 
 ## 年間配当履歴の診断
