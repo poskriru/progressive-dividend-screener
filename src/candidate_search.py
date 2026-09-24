@@ -545,11 +545,16 @@ def build_candidate_search_result_line(
         record.get("roe_percent"),
         suffix="%",
     )
+    dividend_cagr = format_search_decimal(
+        record.get("dividend_cagr_5y_adjusted_percent"),
+        suffix="%",
+    )
 
     return (
         f"{rank}. `{security_code}` {company_name} "
         f"{marker_text} — "
         f"利回り {dividend_yield}"
+        f" / 5期CAGR {dividend_cagr}"
         f" / PER {per_ratio}"
         f" / PBR {pbr_ratio}"
         f" / ROE {roe_percent}"

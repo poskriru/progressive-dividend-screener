@@ -40,6 +40,7 @@ def build_candidate_record(
     per_ratio: Decimal | None = Decimal("12.30"),
     pbr_ratio: Decimal | None = Decimal("1.20"),
     roe_percent: Decimal | None = Decimal("10.50"),
+    dividend_cagr_5y_adjusted_percent: Decimal | None = Decimal("12.34"),
     adjusted: bool = True,
     tdnet_classification: str | None = None,
 ) -> dict[str, object]:
@@ -52,6 +53,9 @@ def build_candidate_record(
         "per_ratio": per_ratio,
         "pbr_ratio": pbr_ratio,
         "roe_percent": roe_percent,
+        "dividend_cagr_5y_adjusted_percent": (
+            dividend_cagr_5y_adjusted_percent
+        ),
         "is_adjustment_coverage_complete": adjusted,
         "tdnet_policy_classification": (
             tdnet_classification
@@ -582,6 +586,46 @@ class CandidateSearchMessageTests(unittest.TestCase):
             "ROE -",
             result_line,
         )
+
+    def test_adjusted_dividend_cagr_is_shown(
+        self,
+    ) -> None:
+        record = build_candidate_record(
+            dividend_cagr_5y_adjusted_percent=Decimal("12.345"),
+        )
+
+        message = build_candidate_search_message(
+            [record],
+            self.request,
+        )
+
+        result_line = next(
+            line
+            for line in message.splitlines()
+            if "`8057`" in line
+        )
+
+        self.assertIn("5期CAGR 12.34%", result_line)
+
+    def test_missing_dividend_metrics_are_displayed_as_hyphens(
+        self,
+    ) -> None:
+        record = build_candidate_record(
+            dividend_cagr_5y_adjusted_percent=None,
+        )
+
+        message = build_candidate_search_message(
+            [record],
+            self.request,
+        )
+
+        result_line = next(
+            line
+            for line in message.splitlines()
+            if "`8057`" in line
+        )
+
+        self.assertIn("5期CAGR -", result_line)
 
     def test_message_does_not_exceed_default_limit(
         self,
