@@ -28,8 +28,14 @@ from database import create_database_connection
 from update_edinet_financials import (
     JST,
     create_google_sheets_service,
+    get_or_create_sheet,
     get_required_environment_variable,
     write_sheet,
+)
+
+from sheets_column_formatting import (
+    apply_column_formats,
+    to_sheet_serial_value,
 )
 
 
@@ -114,6 +120,77 @@ DATABASE_INDICATOR_HEADERS = [
     "調整済み累進配当判定状態",
     "5期調整済み配当履歴",
 ]
+
+# 列名→表示書式パターン。
+# 日付・日時はシリアル値で書き込み、
+# シート側でこれらの書式により表示する。
+INDICATOR_COLUMN_FORMATS_BY_HEADER: dict[str, str] = {
+    "更新日時": "yyyy-mm-dd hh:mm:ss",
+    "株価基準日": "yyyy-mm-dd",
+    "決算期末日": "yyyy-mm-dd",
+    "補正データ開始日": "yyyy-mm-dd",
+    "補正データ終了日": "yyyy-mm-dd",
+    "終値": "0.##",
+    "売上高（百万円）": "#,##0.0",
+    "営業利益（百万円）": "#,##0.0",
+    "純利益（百万円）": "#,##0.0",
+    "総資産（百万円）": "#,##0.0",
+    "純資産（百万円）": "#,##0.0",
+    "自己資本（百万円）": "#,##0.0",
+    "EPS（円）": "0.##",
+    "BPS（円）": "0.##",
+    "1株配当（円）": "0.##",
+    "発行済株式数": "#,##0",
+    "時価総額（百万円）": "#,##0.0",
+    "PER（倍）": "0.##",
+    "PBR（倍）": "0.##",
+    "ROE（%）": "0.00",
+    "ROA（%）": "0.00",
+    "自己資本比率（%）": "0.00",
+    "営業利益率（%）": "0.00",
+    "純利益率（%）": "0.00",
+    "配当利回り（%）": "0.00",
+    "配当性向（%）": "0.00",
+    "営業CF（百万円）": "#,##0.0",
+    "投資CF（百万円）": "#,##0.0",
+    "フリーCF（百万円）": "#,##0.0",
+    "財務CF（百万円）": "#,##0.0",
+    "配当履歴期数": "#,##0",
+    "判定対象配当期数": "#,##0",
+    "最新年間配当（円）": "0.##",
+    "前期年間配当（円）": "0.##",
+    "5期最古年間配当（円）": "0.##",
+    "5期増配回数": "#,##0",
+    "5期据え置き回数": "#,##0",
+    "5期減配回数": "#,##0",
+    "連続非減配期数": "#,##0",
+    "連続増配期数": "#,##0",
+    "5期配当CAGR（%）": "0.00",
+    "最新累積補正係数": "0.########",
+    "5期最古累積補正係数": "0.########",
+    "最新調整済み年間配当（円）": "0.##",
+    "5期最古調整済み年間配当（円）": "0.##",
+    "5期調整済み配当CAGR（%）": "0.00",
+}
+
+
+def build_indicator_column_formats() -> (
+    dict[int, str]
+):
+    """ヘッダー定義から列番号→表示書式の辞書を作る。"""
+
+    return {
+        index: format_pattern
+        for index, header in enumerate(
+            DATABASE_INDICATOR_HEADERS
+        )
+        if (
+            format_pattern
+            := INDICATOR_COLUMN_FORMATS_BY_HEADER.get(
+                header
+            )
+        )
+    }
 
 
 # ============================================================
@@ -490,10 +567,8 @@ def build_indicator_rows(
     Google Sheets出力用の列順へ変換する。
     """
 
-    updated_at = datetime.now(
-        JST
-    ).strftime(
-        "%Y-%m-%d %H:%M:%S"
+    updated_at = to_sheet_serial_value(
+        datetime.now(JST)
     )
 
     rows: list[list[Any]] = []
@@ -502,7 +577,7 @@ def build_indicator_rows(
         rows.append(
             [
                 updated_at,
-                to_sheet_date(
+                to_sheet_serial_value(
                     record.get("trading_date")
                 ),
                 str(
@@ -527,7 +602,7 @@ def build_indicator_rows(
                 to_sheet_number(
                     record.get("close_price")
                 ),
-                to_sheet_date(
+                to_sheet_serial_value(
                     record.get("fiscal_period_end")
                 ),
                 str(
@@ -731,10 +806,10 @@ def build_indicator_rows(
                         "is_adjustment_coverage_complete"
                     )
                 ),
-                to_sheet_date(
+                to_sheet_serial_value(
                     record.get("adjustment_covered_from")
                 ),
-                to_sheet_date(
+                to_sheet_serial_value(
                     record.get("adjustment_covered_to")
                 ),
                 to_sheet_number(
@@ -857,6 +932,19 @@ def main() -> None:
         output_sheet_name,
         DATABASE_INDICATOR_HEADERS,
         indicator_rows,
+    )
+
+    sheet_id = get_or_create_sheet(
+        sheets_service,
+        spreadsheet_id,
+        output_sheet_name,
+    )
+
+    apply_column_formats(
+        sheets_service,
+        spreadsheet_id,
+        sheet_id,
+        build_indicator_column_formats(),
     )
 
     print(

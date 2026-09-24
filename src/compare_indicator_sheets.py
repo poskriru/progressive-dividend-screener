@@ -10,8 +10,10 @@ PostgreSQLから出力した「株式指標_DB比較」を比較する。
 # 標準ライブラリ
 # ============================================================
 
+import re
 import sys
 import traceback
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -72,6 +74,8 @@ NUMERIC_HEADERS = {
 DATE_HEADERS = {
     "株価基準日",
     "決算期末日",
+    "補正データ開始日",
+    "補正データ終了日",
 }
 
 NUMERIC_TOLERANCE = Decimal("0.01")
@@ -227,7 +231,30 @@ def normalize_date_text(
 ) -> str:
     """
     日付表記をYYYY-MM-DD形式へ近づける。
+
+    シート側が日付書式の場合は表示が
+    「2026/9/24」のようになるため、
+    ゼロ埋めして一致判定を行う。
+    シリアル値（数値）も日付へ変換する。
     """
+
+    if isinstance(
+        value,
+        (int, float),
+    ) and not isinstance(
+        value,
+        bool,
+    ):
+        from sheets_column_formatting import (
+            GOOGLE_SHEETS_EPOCH_DATE,
+        )
+
+        serial_date = (
+            GOOGLE_SHEETS_EPOCH_DATE
+            + timedelta(days=int(value))
+        )
+
+        return serial_date.isoformat()
 
     text = normalize_text(
         value
@@ -235,6 +262,22 @@ def normalize_date_text(
 
     if not text:
         return ""
+
+    matched = re.fullmatch(
+        r"(\d{4})[/\-.](\d{1,2})[/\-.](\d{1,2})",
+        text[:10],
+    )
+
+    if matched:
+        year_text, month_text, day_text = (
+            matched.groups()
+        )
+
+        return (
+            f"{int(year_text):04d}-"
+            f"{int(month_text):02d}-"
+            f"{int(day_text):02d}"
+        )
 
     return (
         text[:10]
