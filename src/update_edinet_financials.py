@@ -1424,6 +1424,60 @@ def apply_verified_edinet_dividend_overrides(
 # シート書き込み
 # ============================================================
 
+# ============================================================
+# 書き込みチャンク
+# ============================================================
+
+MAX_WRITE_ROWS_PER_REQUEST = 5000
+MAX_WRITE_CELLS_PER_REQUEST = 1000000
+
+
+def build_write_chunks(
+    values: list[list[Any]],
+    *,
+    max_rows: int = MAX_WRITE_ROWS_PER_REQUEST,
+    max_cells: int = MAX_WRITE_CELLS_PER_REQUEST,
+) -> list[tuple[int, list[list[Any]]]]:
+    """
+    valuesを1リクエストずつに分割する。
+
+    返り値は (開始行番号1始まり, チャンク) のリスト。
+    列数が多いシートではセル数上限でさらに細かく分割し、
+    Google Sheets APIのリクエストサイズ上限を回避する。
+    """
+
+    if not values:
+        return []
+
+    column_count = max(
+        len(row) for row in values
+    )
+
+    rows_per_chunk = max_rows
+
+    if column_count > 0:
+        rows_per_chunk = min(
+            rows_per_chunk,
+            max(
+                1,
+                max_cells // column_count,
+            ),
+        )
+
+    chunks: list[tuple[int, list[list[Any]]]] = []
+
+    start_row = 1
+    index = 0
+
+    while index < len(values):
+        chunk = values[index:index + rows_per_chunk]
+        chunks.append((start_row, chunk))
+        start_row += len(chunk)
+        index += len(chunk)
+
+    return chunks
+
+
 def write_sheet(
     service,
     spreadsheet_id: str,
@@ -1484,19 +1538,24 @@ def write_sheet(
         *rows,
     ]
 
-    (
-        service.spreadsheets()
-        .values()
-        .update(
-            spreadsheetId=spreadsheet_id,
-            range=f"'{sheet_name}'!A1",
-            valueInputOption="RAW",
-            body={
-                "values": values,
-            },
+    for start_row, chunk in build_write_chunks(
+        values
+    ):
+        (
+            service.spreadsheets()
+            .values()
+            .update(
+                spreadsheetId=spreadsheet_id,
+                range=(
+                    f"'{sheet_name}'!A{start_row}"
+                ),
+                valueInputOption="RAW",
+                body={
+                    "values": chunk,
+                },
+            )
+            .execute()
         )
-        .execute()
-    )
 
     (
         service.spreadsheets()
