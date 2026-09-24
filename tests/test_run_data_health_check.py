@@ -31,6 +31,7 @@ from run_data_health_check import (  # noqa: E402
     DEFAULT_MAX_EDINET_AGE_DAYS,
     DEFAULT_MAX_FINANCIAL_AGE_DAYS,
     DEFAULT_MAX_PRICE_AGE_DAYS,
+    DEFAULT_MAX_TDNET_AGE_DAYS,
     MAX_PRICE_AGE_DAYS_ENV,
     OK_PREFIX,
     WARNING_PREFIX,
@@ -38,6 +39,7 @@ from run_data_health_check import (  # noqa: E402
     count_days_since,
     evaluate_age_check,
     evaluate_cache_consistency,
+    evaluate_tdnet_incomplete_analyses,
     evaluate_unsupported_actions,
     get_positive_age_days,
 )
@@ -267,6 +269,35 @@ class UnsupportedActionTests(unittest.TestCase):
 
 
 # ============================================================
+# TDnet未完了解析
+# ============================================================
+
+class TdnetIncompleteAnalysisTests(unittest.TestCase):
+    """TDnet未完了解析の表示を確認する。"""
+
+    def test_zero_count_is_ok(self) -> None:
+        line = evaluate_tdnet_incomplete_analyses(0)
+
+        self.assertTrue(line.startswith(OK_PREFIX))
+        self.assertIn("0件", line)
+
+    def test_positive_count_warns(self) -> None:
+        line = evaluate_tdnet_incomplete_analyses(4)
+
+        self.assertTrue(
+            line.startswith(WARNING_PREFIX)
+        )
+        self.assertIn("4件", line)
+
+    def test_missing_count_is_ok(self) -> None:
+        line = evaluate_tdnet_incomplete_analyses(
+            None
+        )
+
+        self.assertTrue(line.startswith(OK_PREFIX))
+
+
+# ============================================================
 # レポート全体
 # ============================================================
 
@@ -300,6 +331,12 @@ class BuildReportTests(unittest.TestCase):
                 tzinfo=timezone.utc,
             ),
             "unsupported_action_count": 2,
+            "latest_tdnet_published_date": date(
+                2026,
+                9,
+                23,
+            ),
+            "tdnet_incomplete_analysis_count": 0,
         }
 
     def test_healthy_metrics_have_no_warnings(self) -> None:
@@ -315,10 +352,13 @@ class BuildReportTests(unittest.TestCase):
             max_edinet_age_days=(
                 DEFAULT_MAX_EDINET_AGE_DAYS
             ),
+            max_tdnet_age_days=(
+                DEFAULT_MAX_TDNET_AGE_DAYS
+            ),
         )
 
         self.assertFalse(has_warnings)
-        self.assertEqual(len(lines), 10)
+        self.assertEqual(len(lines), 12)
 
     def test_stale_price_causes_warning(self) -> None:
         metrics = self.build_metrics()
@@ -344,6 +384,9 @@ class BuildReportTests(unittest.TestCase):
             ),
             max_edinet_age_days=(
                 DEFAULT_MAX_EDINET_AGE_DAYS
+            ),
+            max_tdnet_age_days=(
+                DEFAULT_MAX_TDNET_AGE_DAYS
             ),
         )
 
