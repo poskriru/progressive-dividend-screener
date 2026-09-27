@@ -12,6 +12,7 @@ Discordへ返せる文字数制限付きメッセージの作成を担当する�
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -495,6 +496,29 @@ def format_search_yen(value: Any) -> str:
     return format(number.normalize(), "f")
 
 
+def format_search_date(value: Any) -> str | None:
+    """検索結果の日付をISO形式へ正規化する。"""
+
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+
+    if isinstance(value, date):
+        return value.isoformat()
+
+    if isinstance(value, str):
+        text = value.strip()
+
+        if len(text) < 10:
+            return None
+
+        try:
+            return date.fromisoformat(text[:10]).isoformat()
+        except ValueError:
+            return None
+
+    return None
+
+
 def get_latest_adjusted_annual_dividend(
     record: Mapping[str, Any],
 ) -> Any:
@@ -557,11 +581,11 @@ def build_candidate_search_result_line(
     )
 
     decision_label = (
-        "adjusted"
+        "調整済"
         if record.get(
             "is_adjustment_coverage_complete"
         ) is True
-        else "raw"
+        else "未調整"
     )
 
     markers = [decision_label]
@@ -570,7 +594,7 @@ def build_candidate_search_result_line(
         record.get("tdnet_policy_classification")
         == "confirmed"
     ):
-        markers.append("TDnet confirmed")
+        markers.append("累進配当方針確認済")
 
     marker_text = " ".join(
         f"[{marker}]"
@@ -679,6 +703,22 @@ def build_candidate_search_message(
         ),
         result_count_line,
     ]
+
+    trading_dates = [
+        parsed_date
+        for record in display_records
+        if (
+            parsed_date := format_search_date(
+                record.get("trading_date")
+            )
+        )
+    ]
+
+    if trading_dates:
+        lines.insert(
+            2,
+            f"株価基準日: {max(trading_dates)}",
+        )
 
     if has_more_results:
         lines.append(
