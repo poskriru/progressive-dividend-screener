@@ -341,6 +341,14 @@ class CandidateSearchRequestTests(unittest.TestCase):
             12,
         )
 
+        overflow_criteria = request.to_candidate_criteria(
+            include_overflow=True
+        )
+        self.assertEqual(
+            overflow_criteria.max_candidates,
+            13,
+        )
+
 
 # ============================================================
 # PostgreSQL検索
@@ -392,7 +400,9 @@ class CandidateSearchExecutionTests(unittest.TestCase):
         )
 
         load_candidates_mock.assert_called_once_with(
-            request.to_candidate_criteria()
+            request.to_candidate_criteria(
+                include_overflow=True
+            )
         )
         enrich_candidates_mock.assert_called_once_with(
             loaded_records
@@ -538,6 +548,52 @@ class CandidateSearchMessageTests(unittest.TestCase):
             "条件に一致する銘柄はありません。",
             message,
         )
+        self.assertIn("条件一致: 0件", message)
+
+    def test_result_count_is_reported_when_all_results_fit(
+        self,
+    ) -> None:
+        records = [
+            build_candidate_record(
+                security_code="1111",
+            ),
+            build_candidate_record(
+                security_code="2222",
+            ),
+        ]
+
+        message = build_candidate_search_message(
+            records,
+            self.request,
+        )
+
+        self.assertIn("条件一致: 2件", message)
+        self.assertNotIn("検索上限を超える候補", message)
+
+    def test_overflow_is_reported_and_only_limit_is_displayed(
+        self,
+    ) -> None:
+        request = parse_candidate_search_request(
+            {"limit": "2"}
+        )
+        records = [
+            build_candidate_record(
+                security_code=f"{index:04d}",
+            )
+            for index in range(3)
+        ]
+
+        message = build_candidate_search_message(
+            records,
+            request,
+        )
+
+        self.assertIn("条件一致: 2件超", message)
+        self.assertIn("先頭2件を表示", message)
+        self.assertIn("検索上限を超える候補があります", message)
+        self.assertIn("1. `0000`", message)
+        self.assertIn("2. `0001`", message)
+        self.assertNotIn("3. `0002`", message)
 
     def test_company_name_is_normalized_to_one_line(
         self,
