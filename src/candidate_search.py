@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 
 # ============================================================
@@ -519,6 +520,50 @@ def format_search_date(value: Any) -> str | None:
     return None
 
 
+def format_edinet_source_link(value: Any) -> str | None:
+    """許可したEDINET閲覧URLだけをDiscordリンクへ変換する。"""
+
+    if not isinstance(value, str):
+        return None
+
+    try:
+        parsed_url = urlsplit(value.strip())
+        query = parse_qs(
+            parsed_url.query,
+            keep_blank_values=False,
+        )
+    except ValueError:
+        return None
+
+    if (
+        parsed_url.scheme != "https"
+        or parsed_url.netloc.lower()
+        != "disclosure2.edinet-fsa.go.jp"
+        or parsed_url.path != "/WZEK0040.aspx"
+        or parsed_url.fragment
+        or set(query) != {"S100"}
+        or len(query["S100"]) != 1
+    ):
+        return None
+
+    document_id = query["S100"][0]
+
+    if (
+        not document_id
+        or len(document_id) > 32
+        or not document_id.isascii()
+        or not document_id.isalnum()
+    ):
+        return None
+
+    safe_url = (
+        "https://disclosure2.edinet-fsa.go.jp/WZEK0040.aspx?"
+        + urlencode({"S100": document_id})
+    )
+
+    return f"[EDINET]({safe_url})"
+
+
 def get_latest_adjusted_annual_dividend(
     record: Mapping[str, Any],
 ) -> Any:
@@ -579,6 +624,14 @@ def build_candidate_search_result_line(
         record.get("company_name"),
         max_length=80,
     )
+    market = normalize_inline_text(
+        record.get("market"),
+        max_length=24,
+    )
+    industry = normalize_inline_text(
+        record.get("industry_33_name"),
+        max_length=32,
+    )
 
     decision_label = (
         "調整済"
@@ -626,10 +679,24 @@ def build_candidate_search_result_line(
     latest_annual_dividend = format_search_yen(
         get_latest_adjusted_annual_dividend(record)
     )
+    industry_label = " / ".join(
+        value
+        for value in (market, industry)
+        if value
+    )
+    industry_context = (
+        f"{industry_label} — "
+        if industry_label
+        else ""
+    )
+    edinet_link = format_edinet_source_link(
+        record.get("financial_source_url")
+    )
+    source_label = f" / {edinet_link}" if edinet_link else ""
 
     return (
         f"{rank}. `{security_code}` {company_name} "
-        f"{marker_text} — "
+        f"{marker_text} — {industry_context}"
         f"利回り {dividend_yield}"
         f" / 5期CAGR {dividend_cagr}"
         f" / 年間配当 {latest_annual_dividend}円"
@@ -637,6 +704,7 @@ def build_candidate_search_result_line(
         f" / PER {per_ratio}"
         f" / PBR {pbr_ratio}"
         f" / ROE {roe_percent}"
+        f"{source_label}"
     )
 
 def finalize_candidate_search_message(
