@@ -7,6 +7,7 @@
 import sys
 import unittest
 from copy import deepcopy
+from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 from unittest.mock import patch
@@ -23,6 +24,7 @@ sys.path.insert(0, str(SRC_DIRECTORY))
 from candidate_search import (  # noqa: E402
     CandidateSearchRequest,
     build_candidate_search_message,
+    format_search_date,
     parse_candidate_search_request,
     search_progressive_dividend_candidates,
 )
@@ -45,6 +47,7 @@ def build_candidate_record(
     adjusted_annual_dividends_yen_5y: list[Decimal] | None = None,
     adjusted: bool = True,
     tdnet_classification: str | None = None,
+    trading_date: date | datetime | str | None = None,
 ) -> dict[str, object]:
     """検索結果表示用の候補レコードを作成する。"""
 
@@ -60,6 +63,7 @@ def build_candidate_record(
     return {
         "security_code": security_code,
         "company_name": company_name,
+        "trading_date": trading_date,
         "dividend_yield_percent": dividend_yield_percent,
         "per_ratio": per_ratio,
         "pbr_ratio": pbr_ratio,
@@ -489,11 +493,11 @@ class CandidateSearchMessageTests(unittest.TestCase):
         )
 
         self.assertIn(
-            "[TDnet confirmed]",
+            "[累進配当方針確認済]",
             confirmed_line,
         )
         self.assertNotIn(
-            "[TDnet confirmed]",
+            "[累進配当方針確認済]",
             not_confirmed_line,
         )
 
@@ -528,13 +532,52 @@ class CandidateSearchMessageTests(unittest.TestCase):
         )
 
         self.assertIn(
-            "[adjusted]",
+            "[調整済]",
             adjusted_line,
         )
         self.assertIn(
-            "[raw]",
+            "[未調整]",
             raw_line,
         )
+
+    def test_latest_trading_date_is_displayed(self) -> None:
+        records = [
+            build_candidate_record(
+                security_code="1111",
+                trading_date=date(2026, 9, 24),
+            ),
+            build_candidate_record(
+                security_code="2222",
+                trading_date=datetime(2026, 9, 25, 15, 0),
+            ),
+        ]
+
+        message = build_candidate_search_message(
+            records,
+            self.request,
+        )
+
+        self.assertIn("株価基準日: 2026-09-25", message)
+
+    def test_date_string_is_normalized(self) -> None:
+        self.assertEqual(
+            format_search_date(
+                "2026-09-24T00:00:00"
+            ),
+            "2026-09-24",
+        )
+
+    def test_invalid_date_is_omitted(self) -> None:
+        message = build_candidate_search_message(
+            [
+                build_candidate_record(
+                    trading_date="not-a-date",
+                ),
+            ],
+            self.request,
+        )
+
+        self.assertNotIn("株価基準日:", message)
 
     def test_empty_results_have_explicit_message(
         self,
