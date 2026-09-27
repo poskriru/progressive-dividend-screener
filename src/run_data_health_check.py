@@ -13,6 +13,7 @@ Discord候補検索キャッシュの整合、TDnet未完了解析を集計し�
 import os
 import sys
 import traceback
+from collections.abc import Mapping
 from datetime import date, datetime, timezone
 from typing import Any
 
@@ -226,6 +227,33 @@ def evaluate_tdnet_incomplete_analyses(
 # メトリクス取得
 # ============================================================
 
+def get_single_column_value(
+    row: Any,
+) -> Any:
+    """辞書形式・タプル形式の1列クエリ結果から値を取得する。"""
+
+    if row is None:
+        return None
+
+    if isinstance(row, Mapping):
+        if len(row) != 1:
+            raise RuntimeError(
+                "健全性メトリクスのクエリ結果は"
+                "1列である必要があります。"
+                f"取得列数: {len(row)}"
+            )
+
+        return next(iter(row.values()))
+
+    try:
+        return row[0]
+    except (IndexError, KeyError, TypeError) as error:
+        raise RuntimeError(
+            "健全性メトリクスのクエリ結果から"
+            "値を取得できませんでした。"
+        ) from error
+
+
 def load_health_metrics() -> dict[str, Any]:
     """健全性チェック用のメトリクスを取得する。"""
 
@@ -320,8 +348,8 @@ def load_health_metrics() -> dict[str, Any]:
             for name, query in queries.items():
                 cursor.execute(query)
                 row = cursor.fetchone()
-                metrics[name] = (
-                    row[0] if row else None
+                metrics[name] = get_single_column_value(
+                    row
                 )
 
     print(

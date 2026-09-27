@@ -42,7 +42,99 @@ from run_data_health_check import (  # noqa: E402
     evaluate_tdnet_incomplete_analyses,
     evaluate_unsupported_actions,
     get_positive_age_days,
+    get_single_column_value,
+    load_health_metrics,
 )
+
+
+# ============================================================
+# SQLメトリクス行取得
+# ============================================================
+
+class SingleColumnValueTests(unittest.TestCase):
+    """psycopgの辞書行とタプル行双方の取得を確認する。"""
+
+    def test_dict_row_returns_only_value(self) -> None:
+        self.assertEqual(
+            get_single_column_value(
+                {"count": 42}
+            ),
+            42,
+        )
+
+    def test_tuple_row_returns_first_value(self) -> None:
+        self.assertEqual(
+            get_single_column_value((42,)),
+            42,
+        )
+
+    def test_none_row_returns_none(self) -> None:
+        self.assertIsNone(
+            get_single_column_value(None)
+        )
+
+    def test_multi_column_mapping_is_rejected(self) -> None:
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "1列",
+        ):
+            get_single_column_value(
+                {"first": 1, "second": 2}
+            )
+
+    def test_empty_sequence_is_reported_clearly(self) -> None:
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "値を取得できません",
+        ):
+            get_single_column_value(())
+
+
+class LoadHealthMetricsTests(unittest.TestCase):
+    """実際の辞書行を使って全メトリクス取得を確認する。"""
+
+    def test_metrics_load_from_dict_rows(self) -> None:
+        class FakeCursor:
+            def __init__(self) -> None:
+                self.executed_queries: list[str] = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def execute(self, query: str) -> None:
+                self.executed_queries.append(query)
+
+            def fetchone(self) -> dict[str, object]:
+                query_index = len(self.executed_queries)
+                return {f"column_{query_index}": query_index}
+
+        class FakeConnection:
+            def __init__(self) -> None:
+                self.fake_cursor = FakeCursor()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def cursor(self) -> FakeCursor:
+                return self.fake_cursor
+
+        connection = FakeConnection()
+
+        with patch(
+            "run_data_health_check.create_database_connection",
+            return_value=connection,
+        ):
+            metrics = load_health_metrics()
+
+        self.assertEqual(len(metrics), 12)
+        self.assertEqual(metrics["active_security_count"], 1)
+        self.assertEqual(metrics["unsupported_action_count"], 12)
 
 
 # ============================================================
