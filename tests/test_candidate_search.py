@@ -24,6 +24,7 @@ sys.path.insert(0, str(SRC_DIRECTORY))
 from candidate_search import (  # noqa: E402
     CandidateSearchRequest,
     build_candidate_search_message,
+    format_edinet_source_link,
     format_search_date,
     parse_candidate_search_request,
     search_progressive_dividend_candidates,
@@ -48,6 +49,9 @@ def build_candidate_record(
     adjusted: bool = True,
     tdnet_classification: str | None = None,
     trading_date: date | datetime | str | None = None,
+    market: str | None = None,
+    industry_33_name: str | None = None,
+    financial_source_url: str | None = None,
 ) -> dict[str, object]:
     """検索結果表示用の候補レコードを作成する。"""
 
@@ -63,6 +67,9 @@ def build_candidate_record(
     return {
         "security_code": security_code,
         "company_name": company_name,
+        "market": market,
+        "industry_33_name": industry_33_name,
+        "financial_source_url": financial_source_url,
         "trading_date": trading_date,
         "dividend_yield_percent": dividend_yield_percent,
         "per_ratio": per_ratio,
@@ -461,6 +468,77 @@ class CandidateSearchMessageTests(unittest.TestCase):
             first_position,
             second_position,
         )
+
+    def test_market_and_industry_are_displayed(self) -> None:
+        record = build_candidate_record(
+            market="プライム",
+            industry_33_name="卸売業",
+        )
+
+        message = build_candidate_search_message(
+            [record],
+            self.request,
+        )
+
+        result_line = next(
+            line
+            for line in message.splitlines()
+            if "`8057`" in line
+        )
+        self.assertIn("プライム / 卸売業", result_line)
+
+    def test_valid_edinet_source_is_a_discord_link(self) -> None:
+        url = (
+            "https://disclosure2.edinet-fsa.go.jp/"
+            "WZEK0040.aspx?S100=S100ABCD"
+        )
+
+        self.assertEqual(
+            format_edinet_source_link(url),
+            f"[EDINET]({url})",
+        )
+
+        record = build_candidate_record(
+            financial_source_url=url,
+        )
+        message = build_candidate_search_message(
+            [record],
+            self.request,
+        )
+        self.assertIn(f"[EDINET]({url})", message)
+
+    def test_invalid_edinet_urls_are_omitted(self) -> None:
+        invalid_urls = (
+            "http://disclosure2.edinet-fsa.go.jp/WZEK0040.aspx?S100=S100ABCD",
+            "https://example.com/WZEK0040.aspx?S100=S100ABCD",
+            "https://disclosure2.edinet-fsa.go.jp.evil.example/WZEK0040.aspx?S100=S100ABCD",
+            "https://user@disclosure2.edinet-fsa.go.jp/WZEK0040.aspx?S100=S100ABCD",
+            "https://disclosure2.edinet-fsa.go.jp/WZEK0040.aspx?S100=",
+            "https://disclosure2.edinet-fsa.go.jp/WZEK0040.aspx?S100=S100ABCD&other=value",
+        )
+
+        for url in invalid_urls:
+            with self.subTest(url=url):
+                self.assertIsNone(
+                    format_edinet_source_link(url)
+                )
+
+    def test_missing_industry_and_edinet_url_do_not_leave_empty_fields(
+        self,
+    ) -> None:
+        record = build_candidate_record()
+        message = build_candidate_search_message(
+            [record],
+            self.request,
+        )
+
+        result_line = next(
+            line
+            for line in message.splitlines()
+            if "`8057`" in line
+        )
+        self.assertNotIn("市場・業種情報なし", result_line)
+        self.assertNotIn("[EDINET]", result_line)
 
     def test_confirmed_marker_is_shown_only_for_confirmed(
         self,
