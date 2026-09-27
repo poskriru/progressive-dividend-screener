@@ -157,8 +157,16 @@ class CandidateSearchRequest:
                 "で指定してください。"
             )
 
-    def to_candidate_criteria(self) -> CandidateCriteria:
-        """既存の候補検索条件へ変換する。"""
+    def to_candidate_criteria(
+        self,
+        *,
+        include_overflow: bool = False,
+    ) -> CandidateCriteria:
+        """既存の候補検索条件へ変換する。
+
+        include_overflow=Trueの場合、表示上限を超える候補が
+        存在するか判定するため、上限より1件多く取得する。
+        """
 
         return CandidateCriteria(
             min_dividend_yield_percent=(
@@ -173,7 +181,9 @@ class CandidateSearchRequest:
             require_positive_free_cash_flow=(
                 self.require_positive_free_cash_flow
             ),
-            max_candidates=self.max_results,
+            max_candidates=(
+                self.max_results + int(include_overflow)
+            ),
         )
 
 
@@ -414,7 +424,9 @@ def search_progressive_dividend_candidates(
         )
 
     records = load_progressive_dividend_candidates(
-        request.to_candidate_criteria()
+        request.to_candidate_criteria(
+            include_overflow=True
+        )
     )
 
     return (
@@ -648,15 +660,35 @@ def build_candidate_search_message(
             "max_charsは100〜2000で指定してください。"
         )
 
+    has_more_results = (
+        len(records) > request.max_results
+    )
+    display_records = records[:request.max_results]
+
+    result_count_line = (
+        f"条件一致: {request.max_results}件超"
+        f"（先頭{request.max_results}件を表示）"
+        if has_more_results
+        else f"条件一致: {len(records)}件"
+    )
+
     lines = [
         "累進配当候補検索",
         build_candidate_search_condition_line(
             request
         ),
-        "",
+        result_count_line,
     ]
 
-    if not records:
+    if has_more_results:
+        lines.append(
+            "検索上限を超える候補があります。"
+            "条件を調整すると続きを確認できます。"
+        )
+
+    lines.append("")
+
+    if not display_records:
         lines.append(
             "条件に一致する銘柄はありません。"
         )
@@ -666,17 +698,19 @@ def build_candidate_search_message(
             max_chars=max_chars,
         )
 
-    total_records = len(records)
+    total_display_records = len(display_records)
 
     for rank, record in enumerate(
-        records,
+        display_records,
         start=1,
     ):
         result_line = build_candidate_search_result_line(
             rank,
             record,
         )
-        remaining_after_add = total_records - rank
+        remaining_after_add = (
+            total_display_records - rank
+        )
 
         candidate_lines = [
             *lines,
@@ -685,8 +719,8 @@ def build_candidate_search_message(
 
         if remaining_after_add > 0:
             candidate_lines.append(
-                f"… 残り{remaining_after_add}件"
-                "は省略される場合があります。"
+                f"… 表示文字数の都合で残り"
+                f"{remaining_after_add}件を省略する場合があります。"
             )
 
         if (
@@ -696,9 +730,10 @@ def build_candidate_search_message(
             lines.append(result_line)
             continue
 
-        omitted_count = total_records - rank + 1
+        omitted_count = total_display_records - rank + 1
         omitted_line = (
-            f"… 残り{omitted_count}件を省略しました。"
+            f"… 表示文字数の都合で残り"
+            f"{omitted_count}件を省略しました。"
         )
 
         if (
