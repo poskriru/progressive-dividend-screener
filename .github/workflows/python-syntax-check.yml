@@ -18,6 +18,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: test-only-password
+          POSTGRES_DB: screener_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       # ======================================================
       # ソースコード取得
@@ -53,5 +67,7 @@ jobs:
       # 単体テスト
       # ======================================================
       - name: Run unit tests
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:test-only-password@localhost:5432/screener_test
         run: |
           python -m unittest discover -s tests -v

@@ -317,7 +317,13 @@ def validate_jpx_current_rights_page_url(
             "指定できます。"
         )
 
-    if parsed.path != JPX_CURRENT_RIGHTS_PAGE_PATH:
+    if (
+        parsed.path != JPX_CURRENT_RIGHTS_PAGE_PATH
+        and re.fullmatch(
+            r"/markets/equities/rights/archives-(?:0[1-9]|1[01])\.html",
+            parsed.path,
+        ) is None
+    ):
         raise RuntimeError(
             "許可されていないJPX当月ページの"
             f"パスです: {parsed.path}"
@@ -939,12 +945,14 @@ def parse_current_rights_csv(
 
 def download_and_parse_current_rights(
     session: requests.Session,
+    *,
+    page_url: str = JPX_CURRENT_RIGHTS_PAGE_URL,
 ) -> ParsedJpxCurrentRights:
     """JPX当月ページと全参照CSVを取得・解析する。"""
 
     page_content, final_page_url = download_content(
         session,
-        JPX_CURRENT_RIGHTS_PAGE_URL,
+        page_url,
         maximum_bytes=MAX_HTML_CONTENT_BYTES,
         accept=(
             "text/html,"
@@ -1285,7 +1293,52 @@ def run_jpx_current_rights_update(
             session
         )
 
-    save_current_rights(result)
+        save_current_rights(result)
+
+        # 月次PDFの公開前に当月ページが翌月へ切り替わる。
+        # PDFの保証末日から最新株価月までの不足月をバックナンバーで更新する。
+        with create_database_connection(
+            DATABASE_APPLICATION_NAME
+        ) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT
+                        MAX(trading_date) AS latest_trading_date,
+                        (SELECT MAX(coverage_end)
+                         FROM screener.jpx_corporate_action_source_files
+                         WHERE source_kind = 'monthly_pdf'
+                           AND sync_status = 'complete') AS covered_to
+                    FROM screener.daily_prices
+                    """
+                )
+                coverage = cursor.fetchone()
+
+        if coverage and coverage["latest_trading_date"] and coverage["covered_to"]:
+            latest_month = get_month_start(coverage["latest_trading_date"])
+            covered_to = coverage["covered_to"]
+            response = session.get(
+                JPX_CURRENT_RIGHTS_PAGE_URL,
+                timeout=REQUEST_TIMEOUT_SECONDS,
+            )
+            response.raise_for_status()
+            soup = BeautifulSoup(decode_html_content(response.content), "html.parser")
+            for option in soup.select("select.backnumber option"):
+                match = re.fullmatch(r"\s*(\d{4})年(\d{1,2})月\s*", option.get_text())
+                if not match:
+                    continue
+                month = date(int(match.group(1)), int(match.group(2)), 1)
+                if covered_to < month <= latest_month and month != result.coverage_month:
+                    archive_url = validate_jpx_current_rights_page_url(
+                        urljoin(JPX_CURRENT_RIGHTS_PAGE_URL, str(option.get("value", "")))
+                    )
+                    archive = download_and_parse_current_rights(
+                        session, page_url=archive_url,
+                    )
+                    if archive.coverage_month != month:
+                        raise RuntimeError("JPXバックナンバーの対象月が一致しません。")
+                    save_current_rights(archive)
+
 
     print(
         "JPX当月権利処理候補の更新が"
