@@ -22,8 +22,8 @@ class PendingMonthsDatabaseTests(unittest.TestCase):
                 INSERT INTO screener.securities (security_code, company_name)
                 VALUES ('1234', 'テスト');
                 INSERT INTO screener.daily_prices
-                    (security_code, trading_date, close_price)
-                VALUES ('1234', '2026-10-01', 100);
+                    (security_code, trading_date, close_price, source)
+                VALUES ('1234', '2026-10-01', 100, 'JPX');
                 INSERT INTO screener.edinet_documents (doc_id, security_code)
                 SELECT 'test' || y::text, '1234'
                 FROM generate_series(2022, 2026) AS y;
