@@ -283,6 +283,7 @@ class DiscordResponseTests(unittest.TestCase):
             ),
             json={
                 "content": "検索結果",
+                "flags": 4,
                 "allowed_mentions": {
                     "parse": [],
                 },

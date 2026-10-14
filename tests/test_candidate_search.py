@@ -514,16 +514,17 @@ class CandidateSearchMessageTests(unittest.TestCase):
         )
         self.assertIn("プライム / 卸売業", result_line)
 
-    def test_valid_edinet_source_is_a_discord_link(self) -> None:
+    def test_edinet_source_uses_search_entry_and_document_id(self) -> None:
         url = (
             "https://disclosure2.edinet-fsa.go.jp/"
             "WZEK0040.aspx?S100=S100ABCD"
         )
 
-        self.assertEqual(
-            format_edinet_source_link(url),
-            f"[EDINET]({url})",
+        expected = (
+            "[EDINET検索](<https://disclosure2.edinet-fsa.go.jp/WEEK0010.aspx>)"
+            " 書類ID: S100ABCD"
         )
+        self.assertEqual(format_edinet_source_link(url), expected)
 
         record = build_candidate_record(
             financial_source_url=url,
@@ -532,7 +533,8 @@ class CandidateSearchMessageTests(unittest.TestCase):
             [record],
             self.request,
         )
-        self.assertIn(f"[EDINET]({url})", message)
+        self.assertIn(expected, message)
+        self.assertNotIn("WZEK0040", message)
 
     def test_invalid_edinet_urls_are_omitted(self) -> None:
         invalid_urls = (
@@ -542,6 +544,9 @@ class CandidateSearchMessageTests(unittest.TestCase):
             "https://user@disclosure2.edinet-fsa.go.jp/WZEK0040.aspx?S100=S100ABCD",
             "https://disclosure2.edinet-fsa.go.jp/WZEK0040.aspx?S100=",
             "https://disclosure2.edinet-fsa.go.jp/WZEK0040.aspx?S100=S100ABCD&other=value",
+            "https://disclosure2.edinet-fsa.go.jp/WZEK0040.aspx?S100=S100ABCD&S100=S100EFGH",
+            "https://disclosure2.edinet-fsa.go.jp/WZEK0040.aspx?S100=S100ABCD#fragment",
+            "https://disclosure2.edinet-fsa.go.jp/WZEK0040.aspx?S100=bad%29%5D%28link",
         )
 
         for url in invalid_urls:

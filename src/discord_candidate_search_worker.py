@@ -52,6 +52,7 @@ LOGGER.setLevel(logging.INFO)
 
 DISCORD_API_BASE_URL = "https://discord.com/api/v10"
 DISCORD_HTTP_TIMEOUT_SECONDS = 10
+DISCORD_MESSAGE_FLAG_SUPPRESS_EMBEDS = 4
 
 SUPPORTED_SEARCH_OPTION_NAMES = frozenset(
     {
@@ -267,6 +268,7 @@ def edit_original_interaction_response(
             build_original_response_url(job),
             json={
                 "content": content,
+                "flags": DISCORD_MESSAGE_FLAG_SUPPRESS_EMBEDS,
                 "allowed_mentions": {
                     "parse": [],
                 },
