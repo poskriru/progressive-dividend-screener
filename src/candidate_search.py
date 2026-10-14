@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
-from urllib.parse import parse_qs, urlencode, urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 
 # ============================================================
@@ -533,7 +533,11 @@ def format_search_date(value: Any) -> str | None:
 
 
 def format_edinet_source_link(value: Any) -> str | None:
-    """許可したEDINET閲覧URLだけをDiscordリンクへ変換する。"""
+    """保存済みURLから書類IDを取り出し、EDINET検索への導線を作る。
+
+    WZEK0040のURLは外部から開くと規定外操作となるため、
+    書類への直リンクとして再利用せず、検索トップと照合用IDを表示する。
+    """
 
     if not isinstance(value, str):
         return None
@@ -568,12 +572,10 @@ def format_edinet_source_link(value: Any) -> str | None:
     ):
         return None
 
-    safe_url = (
-        "https://disclosure2.edinet-fsa.go.jp/WZEK0040.aspx?"
-        + urlencode({"S100": document_id})
+    return (
+        "[EDINET検索](<https://disclosure2.edinet-fsa.go.jp/WEEK0010.aspx>)"
+        f" 書類ID: {document_id}"
     )
-
-    return f"[EDINET]({safe_url})"
 
 
 def get_latest_adjusted_annual_dividend(
