@@ -98,6 +98,7 @@ class CandidateSearchRequestTests(unittest.TestCase):
 
     def test_default_options_are_used(self) -> None:
         request = parse_candidate_search_request({})
+        self.assertEqual(request.sort_by, "yield")
 
         self.assertEqual(
             request.min_dividend_yield_percent,
@@ -137,9 +138,11 @@ class CandidateSearchRequestTests(unittest.TestCase):
                 "min_roe": "10",
                 "positive_fcf": "false",
                 "limit": "15",
+                "sort_by": "cagr",
             }
         )
 
+        self.assertEqual(request.sort_by, "cagr")
         self.assertEqual(
             request.min_dividend_yield_percent,
             Decimal("4.25"),
@@ -175,9 +178,11 @@ class CandidateSearchRequestTests(unittest.TestCase):
                 "max_per": "   ",
                 "positive_fcf": None,
                 "limit": "",
+                "sort_by": " ",
             }
         )
 
+        self.assertEqual(request.sort_by, "yield")
         self.assertEqual(
             request.min_dividend_yield_percent,
             Decimal("3.0"),
@@ -193,6 +198,28 @@ class CandidateSearchRequestTests(unittest.TestCase):
             request.max_results,
             10,
         )
+
+    def test_sort_option_is_validated_and_forwarded(self) -> None:
+        for sort_by, label in (
+            ("yield", "配当利回り"),
+            ("cagr", "5期配当CAGR"),
+            ("roe", "ROE"),
+        ):
+            with self.subTest(sort_by=sort_by):
+                request = parse_candidate_search_request({"sort_by": sort_by})
+                criteria = request.to_candidate_criteria(include_overflow=True)
+                self.assertEqual(criteria.sort_by, sort_by)
+                self.assertEqual(criteria.max_candidates, 11)
+                for records in ([], [build_candidate_record()]):
+                    message = build_candidate_search_message(records, request)
+                    self.assertIn(f"並び順: {label}の高い順", message)
+
+        for value in ("unknown", "yield; DROP TABLE x", True, 1, []):
+            with self.subTest(value=value):
+                with self.assertRaises((TypeError, ValueError)):
+                    parse_candidate_search_request({"sort_by": value})
+                with self.assertRaises((TypeError, ValueError)):
+                    CandidateSearchRequest(sort_by=value)
 
     def test_non_finite_numbers_are_rejected(self) -> None:
         for option_name, value in (

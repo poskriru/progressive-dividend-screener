@@ -23,9 +23,12 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 # ============================================================
 
 from discord_candidate_repository import (
+    CANDIDATE_SORT_LABELS,
+    DEFAULT_CANDIDATE_SORT_BY,
     CandidateCriteria,
     enrich_candidate_records_with_latest_tdnet_policy_results,
     load_progressive_dividend_candidates,
+    validate_candidate_sort_by,
 )
 
 
@@ -69,9 +72,12 @@ class CandidateSearchRequest:
         DEFAULT_SEARCH_REQUIRE_POSITIVE_FREE_CASH_FLOW
     )
     max_results: int = DEFAULT_SEARCH_MAX_RESULTS
+    sort_by: str = DEFAULT_CANDIDATE_SORT_BY
 
     def __post_init__(self) -> None:
         """直接生成された場合も検索条件を検証する。"""
+
+        validate_candidate_sort_by(self.sort_by)
 
         decimal_fields = (
             (
@@ -186,6 +192,7 @@ class CandidateSearchRequest:
             max_candidates=(
                 self.max_results + int(include_overflow)
             ),
+            sort_by=self.sort_by,
         )
 
 
@@ -407,6 +414,11 @@ def parse_candidate_search_request(
         max_results=parse_search_result_limit(
             limit
         ),
+        sort_by=get_search_option(
+            options,
+            "sort_by",
+            DEFAULT_CANDIDATE_SORT_BY,
+        ),
     )
 
 
@@ -607,6 +619,8 @@ def build_candidate_search_condition_line(
         f"フリーCF{free_cash_flow_condition}"
         " / "
         f"最大{request.max_results}件"
+        " / "
+        f"並び順: {CANDIDATE_SORT_LABELS[request.sort_by]}の高い順"
     )
 
 

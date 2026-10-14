@@ -235,6 +235,37 @@ PDF本文と会社IRの一次資料を確認してください。
 | `min_roe` | ROEの下限（%） | 8.0 |
 | `positive_fcf` | フリーCFをプラス必須にする | true |
 | `limit` | 最大表示件数（1〜20） | 10 |
+| `sort_by` | 並び順（`yield`: 利回り、`cagr`: 調整後5期配当CAGR、`roe`: ROEの高い順） | yield |
+
+例: `/dividend-search sort_by:cagr limit:5` で、条件に一致する銘柄から
+調整後5期配当CAGRの高い上位5件を表示します。指定した指標の欠損値は末尾に置き、
+同値の場合は残りの指標（利回り→CAGR→ROEの順）、証券コードで並べます。
+並び替えはDBで表示上限を適用する前に行います。
+
+### 並び順オプションの本番反映
+
+マージ後に「LambdaデプロイZIP作成」workflowを`main`で実行し、
+Receiver・Workerの両ZIPを既存Lambdaへ反映します。
+Discordの既存`dividend-search`コマンド登録JSONの`options`へ
+以下の定義を追加し、既存と同じスコープ（guild/global）のコマンドを更新してください。
+既存オプションも含めた定義全体を送信します。
+
+```json
+{
+  "type": 3,
+  "name": "sort_by",
+  "description": "検索結果の並び順（高い順）",
+  "required": false,
+  "choices": [
+    {"name": "配当利回り", "value": "yield"},
+    {"name": "5期配当CAGR（調整後）", "value": "cagr"},
+    {"name": "ROE", "value": "roe"}
+  ]
+}
+```
+
+確認例: `/dividend-search sort_by:cagr limit:5`を実行し、
+結果の条件行に「並び順: 5期配当CAGRの高い順」が表示されることを確認します。
 
 検索対象キャッシュは毎日0時30分（日本時間）に更新します。
 
