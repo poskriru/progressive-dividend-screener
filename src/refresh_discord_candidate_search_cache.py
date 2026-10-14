@@ -96,6 +96,13 @@ def refresh_candidate_search_cache() -> None:
                 )
                 latest_trading_date = result[1]
 
+                if candidate_count == 0:
+                    raise RuntimeError(
+                        "Discord候補検索キャッシュが0件です。"
+                        "株価更新とJPX補正範囲（月次PDF・"
+                        "未確定月の権利処理バックナンバー）を確認してください。"
+                    )
+
                 print(
                     "Discord候補検索キャッシュを"
                     "更新しました。"

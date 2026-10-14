@@ -25,7 +25,7 @@ import traceback
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 from zoneinfo import ZoneInfo
 
 
@@ -54,6 +54,11 @@ from database import create_database_connection
 JPX_DAILY_REPORT_URL = (
     "https://www.jpx.co.jp/markets/"
     "statistics-equities/daily/index.html"
+)
+
+JPX_DAILY_REPORT_JSON_BASE_URL = (
+    "https://www.jpx.co.jp/automation/markets/"
+    "statistics-equities/daily/json/"
 )
 
 MASTER_SHEET_NAME = "銘柄マスター"
@@ -505,6 +510,43 @@ def find_latest_stock_quotation_pdf(
                 pdf_url,
             )
         )
+
+    if not candidates:
+        # 2026年9月以降の日報はJavaScriptがJSONからリンクを生成する。
+        # 月初に当月分が未掲載でも、月一覧の前月分から取得できる。
+        monthly_response = session.get(
+            JPX_DAILY_REPORT_JSON_BASE_URL
+            + "tsedaily_report_monthlylist.json",
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        )
+        monthly_response.raise_for_status()
+        months = sorted({
+            row["Month"]
+            for row in monthly_response.json().get("TableDatas", [])
+            if isinstance(row.get("Month"), str)
+            and re.fullmatch(r"\d{6}", row["Month"])
+        }, reverse=True)
+
+        for month in months[:2]:
+            monthly_report = session.get(
+                JPX_DAILY_REPORT_JSON_BASE_URL
+                + f"tsedaily_report_{month}.json",
+                timeout=REQUEST_TIMEOUT_SECONDS,
+            )
+            monthly_report.raise_for_status()
+            for row in monthly_report.json().get("TableDatas", []):
+                href = str(row.get("Stocks") or "").strip()
+                match = pattern.search(href)
+                if not match:
+                    continue
+                if row.get("TradeDate") != match.group(1):
+                    raise RuntimeError("JPX日報JSONの日付とPDF名が一致しません。")
+                pdf_url = urljoin(JPX_DAILY_REPORT_URL, href)
+                if urlparse(pdf_url).hostname != "www.jpx.co.jp":
+                    raise RuntimeError("JPX日報JSONのPDFホストが不正です。")
+                candidates.append((match.group(1), pdf_url))
+            if candidates:
+                break
 
     if not candidates:
         raise RuntimeError(
