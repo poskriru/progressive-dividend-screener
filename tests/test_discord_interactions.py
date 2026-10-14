@@ -279,6 +279,11 @@ class DiscordCommandTests(
                         "type": 4,
                         "value": 5,
                     },
+                    {
+                        "name": "sort_by",
+                        "type": 3,
+                        "value": "cagr",
+                    },
                 ],
             },
         }
@@ -326,6 +331,7 @@ class DiscordCommandTests(
                     "min_yield": 4.25,
                     "positive_fcf": False,
                     "limit": 5,
+                    "sort_by": "cagr",
                 },
             }
         )

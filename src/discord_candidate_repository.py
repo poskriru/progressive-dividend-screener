@@ -32,6 +32,29 @@ from load_latest_tdnet_policy_results import (
 # 検索条件
 # ============================================================
 
+DEFAULT_CANDIDATE_SORT_BY = "yield"
+CANDIDATE_SORT_LABELS = {
+    "yield": "配当利回り",
+    "cagr": "5期配当CAGR",
+    "roe": "ROE",
+}
+CANDIDATE_SORT_COLUMNS = {
+    "yield": "dividend_yield_percent",
+    "cagr": "dividend_cagr_5y_adjusted_percent",
+    "roe": "roe_percent",
+}
+
+
+def validate_candidate_sort_by(value: str) -> None:
+    """SQLへ渡す並び順を固定の選択肢に限定する。"""
+
+    if not isinstance(value, str):
+        raise TypeError("sort_byは文字列で指定してください。")
+
+    if value not in CANDIDATE_SORT_COLUMNS:
+        raise ValueError("sort_byはyield、cagr、roeから指定してください。")
+
+
 @dataclass(frozen=True)
 class CandidateCriteria:
     """累進配当候補の抽出条件。"""
@@ -43,6 +66,10 @@ class CandidateCriteria:
     min_roe_percent: Decimal
     require_positive_free_cash_flow: bool
     max_candidates: int
+    sort_by: str = DEFAULT_CANDIDATE_SORT_BY
+
+    def __post_init__(self) -> None:
+        validate_candidate_sort_by(self.sort_by)
 
 
 # ============================================================
@@ -60,7 +87,19 @@ def load_progressive_dividend_candidates(
             "指定してください。"
         )
 
-    query = """
+    validate_candidate_sort_by(criteria.sort_by)
+    primary_column = CANDIDATE_SORT_COLUMNS[criteria.sort_by]
+    sort_columns = [primary_column] + [
+        column
+        for column in CANDIDATE_SORT_COLUMNS.values()
+        if column != primary_column
+    ]
+    order_by = ", ".join(
+        f"{column} DESC NULLS LAST"
+        for column in sort_columns
+    ) + ", security_code"
+
+    query = f"""
         SELECT
             security_code,
             company_name,
@@ -109,12 +148,7 @@ def load_progressive_dividend_candidates(
           AND pbr_ratio <= %s
           AND roe_percent >= %s
           AND (%s = FALSE OR free_cash_flow_jpy > 0)
-        ORDER BY
-            dividend_yield_percent DESC NULLS LAST,
-            dividend_cagr_5y_adjusted_percent
-                DESC NULLS LAST,
-            roe_percent DESC NULLS LAST,
-            security_code
+        ORDER BY {order_by}
         LIMIT %s;
     """
 

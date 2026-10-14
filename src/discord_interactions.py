@@ -64,6 +64,7 @@ SUPPORTED_OPTION_NAMES = frozenset(
         "min_roe",
         "positive_fcf",
         "limit",
+        "sort_by",
     }
 )
 
