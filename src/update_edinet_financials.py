@@ -35,8 +35,8 @@ EDINET_DOCUMENT_API_URL = (
 )
 
 EDINET_VIEW_URL = (
-    "https://disclosure2.edinet-fsa.go.jp/"
-    "WZEK0040.aspx?S100={doc_id}"
+    "https://disclosure2dl.edinet-fsa.go.jp/"
+    "searchdocument/pdf/{doc_id}.pdf"
 )
 
 DOCUMENT_SHEET_NAME = "EDINET書類"

@@ -514,20 +514,29 @@ class CandidateSearchMessageTests(unittest.TestCase):
         )
         self.assertIn("プライム / 卸売業", result_line)
 
-    def test_edinet_source_uses_search_entry_and_document_id(self) -> None:
-        url = (
+    def test_edinet_source_uses_direct_pdf_link(self) -> None:
+        legacy_url = (
             "https://disclosure2.edinet-fsa.go.jp/"
             "WZEK0040.aspx?S100=S100ABCD"
         )
+        pdf_url = (
+            "https://disclosure2dl.edinet-fsa.go.jp/"
+            "searchdocument/pdf/S100ABCD.pdf"
+        )
 
         expected = (
-            "[EDINET検索](<https://disclosure2.edinet-fsa.go.jp/WEEK0010.aspx>)"
-            " 書類ID: S100ABCD"
+            "[EDINET PDF](<"
+            "https://disclosure2dl.edinet-fsa.go.jp/"
+            "searchdocument/pdf/S100ABCD.pdf>)"
         )
-        self.assertEqual(format_edinet_source_link(url), expected)
+        self.assertEqual(format_edinet_source_link(pdf_url), expected)
+        self.assertEqual(
+            format_edinet_source_link(legacy_url),
+            expected,
+        )
 
         record = build_candidate_record(
-            financial_source_url=url,
+            financial_source_url=pdf_url,
         )
         message = build_candidate_search_message(
             [record],
@@ -547,6 +556,16 @@ class CandidateSearchMessageTests(unittest.TestCase):
             "https://disclosure2.edinet-fsa.go.jp/WZEK0040.aspx?S100=S100ABCD&S100=S100EFGH",
             "https://disclosure2.edinet-fsa.go.jp/WZEK0040.aspx?S100=S100ABCD#fragment",
             "https://disclosure2.edinet-fsa.go.jp/WZEK0040.aspx?S100=bad%29%5D%28link",
+            "http://disclosure2dl.edinet-fsa.go.jp/searchdocument/pdf/S100ABCD.pdf",
+            "https://example.com/searchdocument/pdf/S100ABCD.pdf",
+            "https://disclosure2dl.edinet-fsa.go.jp/searchdocument/pdf/S100ABCD",
+            "https://disclosure2dl.edinet-fsa.go.jp/searchdocument/pdf/S100ABCD.PDF",
+            "https://disclosure2dl.edinet-fsa.go.jp/searchdocument/pdf/S100ABCD.evil.pdf",
+            "https://disclosure2dl.edinet-fsa.go.jp/searchdocument/pdf/.pdf",
+            "https://disclosure2dl.edinet-fsa.go.jp/searchdocument/pdf/S100ABCD.pdf?x=1",
+            "https://disclosure2dl.edinet-fsa.go.jp/searchdocument/pdf/S100ABCD.pdf#frag",
+            "https://disclosure2dl.edinet-fsa.go.jp/searchdocument/pdf/bad%29%5D%28link.pdf",
+            "https://disclosure2dl.edinet-fsa.go.jp/searchdocument/pdf/S100ABCD/extra.pdf",
         )
 
         for url in invalid_urls:

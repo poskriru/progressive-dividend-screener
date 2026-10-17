@@ -532,37 +532,60 @@ def format_search_date(value: Any) -> str | None:
     return None
 
 
-def format_edinet_source_link(value: Any) -> str | None:
-    """保存済みURLから書類IDを取り出し、EDINET検索への導線を作る。
+EDINET_PDF_BASE_URL = (
+    "https://disclosure2dl.edinet-fsa.go.jp/"
+    "searchdocument/pdf"
+)
 
-    WZEK0040のURLは外部から開くと規定外操作となるため、
-    書類への直リンクとして再利用せず、検索トップと照合用IDを表示する。
-    """
+
+def extract_edinet_document_id(value: Any) -> str | None:
+    """保存済みURLからEDINET書類IDを取り出す。"""
 
     if not isinstance(value, str):
         return None
 
     try:
         parsed_url = urlsplit(value.strip())
-        query = parse_qs(
-            parsed_url.query,
-            keep_blank_values=False,
-        )
     except ValueError:
         return None
 
-    if (
-        parsed_url.scheme != "https"
-        or parsed_url.netloc.lower()
-        != "disclosure2.edinet-fsa.go.jp"
-        or parsed_url.path != "/WZEK0040.aspx"
-        or parsed_url.fragment
-        or set(query) != {"S100"}
-        or len(query["S100"]) != 1
-    ):
-        return None
+    netloc = parsed_url.netloc.lower()
+    document_id: str | None = None
 
-    document_id = query["S100"][0]
+    if (
+        parsed_url.scheme == "https"
+        and netloc == "disclosure2dl.edinet-fsa.go.jp"
+        and parsed_url.path.startswith(
+            "/searchdocument/pdf/"
+        )
+        and not parsed_url.fragment
+        and not parsed_url.query
+    ):
+        filename = parsed_url.path[
+            len("/searchdocument/pdf/") :
+        ]
+
+        if filename.endswith(".pdf"):
+            document_id = filename[: -len(".pdf")]
+    elif (
+        parsed_url.scheme == "https"
+        and netloc == "disclosure2.edinet-fsa.go.jp"
+        and parsed_url.path == "/WZEK0040.aspx"
+        and not parsed_url.fragment
+    ):
+        try:
+            query = parse_qs(
+                parsed_url.query,
+                keep_blank_values=False,
+            )
+        except ValueError:
+            return None
+
+        if (
+            set(query) == {"S100"}
+            and len(query["S100"]) == 1
+        ):
+            document_id = query["S100"][0]
 
     if (
         not document_id
@@ -572,9 +595,24 @@ def format_edinet_source_link(value: Any) -> str | None:
     ):
         return None
 
+    return document_id
+
+
+def format_edinet_source_link(value: Any) -> str | None:
+    """保存済みURLから書類IDを取り出し、書類PDFへの直リンクを作る。
+
+    WZEK0040のURLは外部から開くと規定外操作となるため、
+    searchdocument/pdf形式の直リンクへ変換して表示する。
+    """
+
+    document_id = extract_edinet_document_id(value)
+
+    if document_id is None:
+        return None
+
     return (
-        "[EDINET検索](<https://disclosure2.edinet-fsa.go.jp/WEEK0010.aspx>)"
-        f" 書類ID: {document_id}"
+        "[EDINET PDF](<"
+        f"{EDINET_PDF_BASE_URL}/{document_id}.pdf>)"
     )
 
 
