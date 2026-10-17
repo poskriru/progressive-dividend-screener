@@ -22,6 +22,7 @@ from typing import Any
 # ============================================================
 
 from database import create_database_connection
+from edinet_source_links import to_edinet_sheet_url
 
 from export_database_indicators import (
     to_sheet_integer,
@@ -333,11 +334,12 @@ def build_corporate_action_candidate_rows(
                 digits=4,
             ),
             DIAGNOSTIC_CAUTION,
-            str(
-                record.get("previous_source_url", "")
-                or ""
+            to_edinet_sheet_url(
+                record.get("previous_source_url")
             ),
-            str(record.get("source_url", "") or ""),
+            to_edinet_sheet_url(
+                record.get("source_url")
+            ),
         ]
 
         if len(row) != len(

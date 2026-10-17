@@ -113,6 +113,7 @@ jobs:
             src/candidate_search.py \
             src/discord_candidate_repository.py \
             src/database.py \
+            src/edinet_source_links.py \
             src/enrich_tdnet_policy_candidates.py \
             src/load_latest_tdnet_policy_results.py \
             src/load_tdnet_policy_pdf_analyses.py \

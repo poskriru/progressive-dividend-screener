@@ -40,6 +40,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from database import create_database_connection
+from edinet_source_links import build_edinet_pdf_url
 
 
 # ============================================================
@@ -1070,6 +1071,20 @@ def convert_document_to_row(
         else ""
     )
 
+    doc_id = normalize_value(
+        document.get("docID")
+    )
+
+    pdf_flag = str(
+        document.get("pdfFlag") or ""
+    ).strip()
+
+    edinet_link = (
+        build_edinet_pdf_url(doc_id)
+        if doc_id and pdf_flag == "1"
+        else EDINET_VIEWER_URL
+    )
+
     return [
         datetime.now(JST).strftime(
             "%Y-%m-%d %H:%M:%S"
@@ -1133,7 +1148,7 @@ def convert_document_to_row(
             document.get("legalStatus")
         ),
         "金融庁EDINET API",
-        EDINET_VIEWER_URL,
+        edinet_link,
     ]
 
 

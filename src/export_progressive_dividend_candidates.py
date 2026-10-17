@@ -37,6 +37,8 @@ from export_database_indicators import (
     yen_to_sheet_million,
 )
 
+from edinet_source_links import to_edinet_sheet_url
+
 from sheets_column_formatting import (
     apply_column_formats,
     column_formats_from_headers,
@@ -938,12 +940,10 @@ def build_candidate_rows(
                     "annual_dividends_yen_5y"
                 ),
             ),
-            str(
+            to_edinet_sheet_url(
                 record.get(
                     "financial_source_url",
-                    "",
                 )
-                or ""
             ),
             to_sheet_boolean(
                 record.get(
