@@ -649,15 +649,7 @@ def build_candidate_search_result_line(
         max_length=32,
     )
 
-    decision_label = (
-        "調整済"
-        if record.get(
-            "is_adjustment_coverage_complete"
-        ) is True
-        else "未調整"
-    )
-
-    markers = [decision_label]
+    markers: list[str] = []
 
     if (
         record.get("tdnet_policy_classification")

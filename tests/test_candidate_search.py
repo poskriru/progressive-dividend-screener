@@ -611,7 +611,7 @@ class CandidateSearchMessageTests(unittest.TestCase):
             not_confirmed_line,
         )
 
-    def test_adjusted_and_raw_labels_are_shown(
+    def test_adjusted_labels_are_not_shown(
         self,
     ) -> None:
         records = [
@@ -630,25 +630,8 @@ class CandidateSearchMessageTests(unittest.TestCase):
             self.request,
         )
 
-        adjusted_line = next(
-            line
-            for line in message.splitlines()
-            if "`1111`" in line
-        )
-        raw_line = next(
-            line
-            for line in message.splitlines()
-            if "`2222`" in line
-        )
-
-        self.assertIn(
-            "[調整済]",
-            adjusted_line,
-        )
-        self.assertIn(
-            "[未調整]",
-            raw_line,
-        )
+        self.assertNotIn("[調整済]", message)
+        self.assertNotIn("[未調整]", message)
 
     def test_latest_trading_date_is_displayed(self) -> None:
         records = [
