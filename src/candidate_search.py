@@ -15,7 +15,6 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
-from urllib.parse import parse_qs, urlsplit
 
 
 # ============================================================
@@ -29,6 +28,10 @@ from discord_candidate_repository import (
     enrich_candidate_records_with_latest_tdnet_policy_results,
     load_progressive_dividend_candidates,
     validate_candidate_sort_by,
+)
+from edinet_source_links import (
+    build_edinet_pdf_url,
+    extract_edinet_document_id,
 )
 
 
@@ -532,72 +535,6 @@ def format_search_date(value: Any) -> str | None:
     return None
 
 
-EDINET_PDF_BASE_URL = (
-    "https://disclosure2dl.edinet-fsa.go.jp/"
-    "searchdocument/pdf"
-)
-
-
-def extract_edinet_document_id(value: Any) -> str | None:
-    """保存済みURLからEDINET書類IDを取り出す。"""
-
-    if not isinstance(value, str):
-        return None
-
-    try:
-        parsed_url = urlsplit(value.strip())
-    except ValueError:
-        return None
-
-    netloc = parsed_url.netloc.lower()
-    document_id: str | None = None
-
-    if (
-        parsed_url.scheme == "https"
-        and netloc == "disclosure2dl.edinet-fsa.go.jp"
-        and parsed_url.path.startswith(
-            "/searchdocument/pdf/"
-        )
-        and not parsed_url.fragment
-        and not parsed_url.query
-    ):
-        filename = parsed_url.path[
-            len("/searchdocument/pdf/") :
-        ]
-
-        if filename.endswith(".pdf"):
-            document_id = filename[: -len(".pdf")]
-    elif (
-        parsed_url.scheme == "https"
-        and netloc == "disclosure2.edinet-fsa.go.jp"
-        and parsed_url.path == "/WZEK0040.aspx"
-        and not parsed_url.fragment
-    ):
-        try:
-            query = parse_qs(
-                parsed_url.query,
-                keep_blank_values=False,
-            )
-        except ValueError:
-            return None
-
-        if (
-            set(query) == {"S100"}
-            and len(query["S100"]) == 1
-        ):
-            document_id = query["S100"][0]
-
-    if (
-        not document_id
-        or len(document_id) > 32
-        or not document_id.isascii()
-        or not document_id.isalnum()
-    ):
-        return None
-
-    return document_id
-
-
 def format_edinet_source_link(value: Any) -> str | None:
     """保存済みURLから書類IDを取り出し、書類PDFへの直リンクを作る。
 
@@ -612,7 +549,7 @@ def format_edinet_source_link(value: Any) -> str | None:
 
     return (
         "[EDINET PDF](<"
-        f"{EDINET_PDF_BASE_URL}/{document_id}.pdf>)"
+        f"{build_edinet_pdf_url(document_id)}>)"
     )
 
 

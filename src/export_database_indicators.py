@@ -24,6 +24,7 @@ from typing import Any
 # ============================================================
 
 from database import create_database_connection
+from edinet_source_links import to_edinet_sheet_url
 
 from update_edinet_financials import (
     JST,
@@ -713,12 +714,10 @@ def build_indicator_rows(
                     )
                     or ""
                 ),
-                str(
+                to_edinet_sheet_url(
                     record.get(
                         "financial_source_url",
-                        "",
                     )
-                    or ""
                 ),
                 to_sheet_integer(
                     record.get(
