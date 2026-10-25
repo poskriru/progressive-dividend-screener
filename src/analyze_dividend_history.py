@@ -429,10 +429,17 @@ def notify_diagnosis_summary(
         )
     )
 
+    if success:
+        print(
+            "配当履歴診断は正常のため、"
+            "Discord通知を省略します。"
+        )
+        return
+
     send_discord_notification(
         title,
         description,
-        success=success,
+        success=False,
     )
 
     print("配当履歴診断のDiscord通知処理を実行しました。")

@@ -2126,12 +2126,6 @@ def main() -> None:
         ]
     )
 
-    send_discord_notification(
-        "✅ 最新株価更新完了",
-        description,
-        success=True,
-    )
-
     print(description)
 
 

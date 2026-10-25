@@ -478,16 +478,17 @@ def run_data_health_check() -> None:
     for line in lines:
         print(line, flush=True)
 
-    title = (
-        "データ整合性チェックで警告を検出しました"
-        if has_warnings
-        else "データ整合性チェックは正常です"
-    )
+    if not has_warnings:
+        print(
+            "データ整合性チェックは正常のため、"
+            "Discord通知を省略します。"
+        )
+        return
 
     send_discord_notification(
-        title,
+        "データ整合性チェックで警告を検出しました",
         "\n".join(lines),
-        success=not has_warnings,
+        success=False,
     )
 
 

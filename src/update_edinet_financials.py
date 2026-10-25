@@ -4255,18 +4255,6 @@ def main() -> None:
     # ========================================================
 
     if not target_documents:
-        send_discord_notification(
-            discord_webhook_url,
-            "ℹ️ EDINET財務更新対象なし",
-            (
-                "未処理の有価証券報告書はありません。\n\n"
-                f"既存財務データ: "
-                f"{len(existing_financial_rows):,}件\n"
-                "株式指標はPostgreSQLから別工程で出力します。"
-            ),
-            success=True,
-        )
-
         print("未処理の有価証券報告書はありません。")
         print(
             "株式指標はPostgreSQLから"
@@ -4578,23 +4566,23 @@ def main() -> None:
         all_financial_rows,
     )
 
-    send_discord_notification(
-        discord_webhook_url,
-        "✅ EDINET財務情報更新完了",
-        (
-            f"処理対象: {len(target_documents):,}件\n"
-            f"成功: {success_count:,}件\n"
-            f"失敗: {failure_count:,}件\n"
-            f"主要項目に欠損あり: "
-            f"{missing_metric_count:,}件\n"
-            f"EDINET財務保存総数: "
-            f"{len(all_financial_rows):,}件\n\n"
-            f"保存先: {FINANCIAL_SHEET_NAME}\n"
-            "株式指標はPostgreSQLから別工程で出力します。\n"
-            "データ出典: 金融庁EDINET API"
-        ),
-        success=failure_count == 0,
-    )
+    if failure_count > 0:
+        send_discord_notification(
+            discord_webhook_url,
+            "❌ EDINET財務情報更新で失敗あり",
+            (
+                f"処理対象: {len(target_documents):,}件\n"
+                f"成功: {success_count:,}件\n"
+                f"失敗: {failure_count:,}件\n"
+                f"主要項目に欠損あり: "
+                f"{missing_metric_count:,}件\n"
+                f"EDINET財務保存総数: "
+                f"{len(all_financial_rows):,}件\n\n"
+                f"保存先: {FINANCIAL_SHEET_NAME}\n"
+                "GitHub Actionsのログを確認してください。"
+            ),
+            success=False,
+        )
 
     print(
         f"完了: 成功={success_count}, "
