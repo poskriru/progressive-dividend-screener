@@ -2140,6 +2140,16 @@ def notify_discord_candidates(
         )
         return
 
+    if (
+        not changes.is_first_export
+        and not changes.has_changes
+    ):
+        print(
+            "累進配当候補に前回比の変更がないため、"
+            "Discord通知を省略します。"
+        )
+        return
+
     description = build_discord_notification_description(
         records,
         criteria,

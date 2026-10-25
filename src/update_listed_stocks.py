@@ -1411,12 +1411,6 @@ def main() -> None:
         ]
     )
 
-    send_discord_notification(
-        "✅ 銘柄マスター更新完了",
-        description,
-        success=True,
-    )
-
     print(description)
 
 
