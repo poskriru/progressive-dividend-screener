@@ -24,6 +24,9 @@ from typing import Any
 
 from database import create_database_connection
 
+from update_edinet_financials import (
+    create_google_sheets_service,
+)
 from update_stock_prices import send_discord_notification
 
 
@@ -56,6 +59,9 @@ MAX_AGE_DAYS_LIMIT = 3650
 
 WARNING_PREFIX = "警告"
 OK_PREFIX = "OK"
+
+TDNET_SHEET_NAME = "TDnet配当開示"
+TDNET_PUBLISHED_DATE_COLUMN = "B"
 
 
 # ============================================================
@@ -254,6 +260,75 @@ def get_single_column_value(
         ) from error
 
 
+def load_tdnet_latest_published_date() -> date | None:
+    """TDnet配当開示シートから最新の公開日を取得する。
+
+    TDnet開示はDB保存せずSheets管理のため、
+    PDF解析結果のDB日付では取得状況を判定できない。
+    """
+
+    service_account_json = os.getenv(
+        "GOOGLE_SERVICE_ACCOUNT_JSON", ""
+    ).strip()
+    spreadsheet_id = os.getenv(
+        "GOOGLE_SPREADSHEET_ID", ""
+    ).strip()
+
+    if not service_account_json or not spreadsheet_id:
+        print(
+            "GOOGLE_SERVICE_ACCOUNT_JSONまたは"
+            "GOOGLE_SPREADSHEET_IDが未設定のため、"
+            "TDnet配当開示シートを読みません。"
+        )
+        return None
+
+    try:
+        service = create_google_sheets_service(
+            service_account_json
+        )
+
+        values = (
+            service.spreadsheets()
+            .values()
+            .get(
+                spreadsheetId=spreadsheet_id,
+                range=(
+                    f"'{TDNET_SHEET_NAME}'!"
+                    f"{TDNET_PUBLISHED_DATE_COLUMN}2:"
+                    f"{TDNET_PUBLISHED_DATE_COLUMN}"
+                ),
+            )
+            .execute()
+            .get("values", [])
+        )
+    except Exception as error:
+        print(
+            "TDnet配当開示シートの読み取りに"
+            "失敗しました。"
+            f"{type(error).__name__}: {error}",
+            file=sys.stderr,
+        )
+        return None
+
+    dates: list[date] = []
+
+    for row in values:
+        text = str(row[0]).strip() if row else ""
+
+        if not text:
+            continue
+
+        try:
+            dates.append(date.fromisoformat(text[:10]))
+        except ValueError:
+            continue
+
+    if not dates:
+        return None
+
+    return max(dates)
+
+
 def load_health_metrics() -> dict[str, Any]:
     """健全性チェック用のメトリクスを取得する。"""
 
@@ -307,12 +382,6 @@ def load_health_metrics() -> dict[str, Any]:
             """
             SELECT MAX(submitted_at)
             FROM screener.edinet_documents
-            """
-        ),
-        "latest_tdnet_published_date": (
-            """
-            SELECT MAX(published_date)
-            FROM screener.tdnet_policy_pdf_analyses
             """
         ),
         "tdnet_incomplete_analysis_count": (
@@ -465,6 +534,10 @@ def run_data_health_check() -> None:
     )
 
     metrics = load_health_metrics()
+
+    metrics["latest_tdnet_published_date"] = (
+        load_tdnet_latest_published_date()
+    )
 
     lines, has_warnings = build_health_report(
         metrics,

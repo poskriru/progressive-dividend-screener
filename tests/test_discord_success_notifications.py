@@ -113,6 +113,10 @@ class HealthCheckNotificationTests(unittest.TestCase):
             "run_data_health_check.load_health_metrics",
             return_value={},
         ), patch(
+            "run_data_health_check"
+            ".load_tdnet_latest_published_date",
+            return_value=None,
+        ), patch(
             "run_data_health_check.build_health_report",
             return_value=([], False),
         ), patch(
@@ -127,6 +131,10 @@ class HealthCheckNotificationTests(unittest.TestCase):
         with patch(
             "run_data_health_check.load_health_metrics",
             return_value={},
+        ), patch(
+            "run_data_health_check"
+            ".load_tdnet_latest_published_date",
+            return_value=None,
         ), patch(
             "run_data_health_check.build_health_report",
             return_value=(["警告: 株価データが古い"], True),

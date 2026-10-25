@@ -4,13 +4,14 @@
 # 標準ライブラリ
 # ============================================================
 
+import os
 import sys
 import types
 import unittest
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 
 # ============================================================
@@ -44,6 +45,7 @@ from run_data_health_check import (  # noqa: E402
     get_positive_age_days,
     get_single_column_value,
     load_health_metrics,
+    load_tdnet_latest_published_date,
 )
 
 
@@ -132,9 +134,9 @@ class LoadHealthMetricsTests(unittest.TestCase):
         ):
             metrics = load_health_metrics()
 
-        self.assertEqual(len(metrics), 12)
+        self.assertEqual(len(metrics), 11)
         self.assertEqual(metrics["active_security_count"], 1)
-        self.assertEqual(metrics["unsupported_action_count"], 12)
+        self.assertEqual(metrics["unsupported_action_count"], 11)
 
 
 # ============================================================
@@ -489,6 +491,63 @@ class BuildReportTests(unittest.TestCase):
             if line.startswith(WARNING_PREFIX)
         ]
         self.assertTrue(warning_lines)
+
+
+class TdnetSheetLatestDateTests(unittest.TestCase):
+    """TDnet配当開示シートから最新公開日を取得する。"""
+
+    def setUp(self) -> None:
+        self.environ = patch.dict(
+            os.environ,
+            {
+                "GOOGLE_SERVICE_ACCOUNT_JSON": (
+                    '{"type": "service_account"}'
+                ),
+                "GOOGLE_SPREADSHEET_ID": "test-sheet-id",
+            },
+        )
+        self.environ.start()
+        self.addCleanup(self.environ.stop)
+
+    def test_missing_env_returns_none(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertIsNone(
+                load_tdnet_latest_published_date()
+            )
+
+    def test_returns_latest_published_date(self) -> None:
+        service = MagicMock()
+
+        service.spreadsheets.return_value.values \
+            .return_value.get.return_value.execute \
+            .return_value = {
+                "values": [
+                    ["2026-10-19"],
+                    ["2026-10-23"],
+                    [],
+                    ["2026-10-22"],
+                ]
+            }
+
+        with patch(
+            "run_data_health_check"
+            ".create_google_sheets_service",
+            return_value=service,
+        ):
+            self.assertEqual(
+                load_tdnet_latest_published_date(),
+                date(2026, 10, 23),
+            )
+
+    def test_read_failure_returns_none(self) -> None:
+        with patch(
+            "run_data_health_check"
+            ".create_google_sheets_service",
+            side_effect=RuntimeError("read error"),
+        ):
+            self.assertIsNone(
+                load_tdnet_latest_published_date()
+            )
 
 
 if __name__ == "__main__":
