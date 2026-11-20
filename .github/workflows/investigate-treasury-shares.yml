@@ -1,0 +1,42 @@
+name: 自己株式数抽出の調査
+
+on:
+  workflow_dispatch:
+    inputs:
+      doc_ids:
+        description: "調査対象のdoc_id（カンマ区切り）"
+        required: true
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  investigate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      TZ: Asia/Tokyo
+
+      EDINET_API_KEY: ${{ secrets.EDINET_API_KEY }}
+
+      DOC_IDS: ${{ github.event.inputs.doc_ids }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests
+
+      - name: Investigate treasury shares
+        run: |
+          python src/investigate_treasury_shares.py
