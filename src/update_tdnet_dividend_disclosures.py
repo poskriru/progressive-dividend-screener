@@ -132,6 +132,7 @@ DIVIDEND_KEYWORDS = (
     "記念配当",
     "配当",
     "株主還元",
+    "経営計画",
 )
 
 POLICY_CAUTION = (
@@ -236,6 +237,7 @@ def classify_disclosure_title(
         keyword.upper() in upper_title
         for keyword in POLICY_KEYWORDS
     )
+    is_plan_disclosure = "経営計画" in normalized_title
 
     if is_policy_candidate:
         category = "配当・株主還元方針"
@@ -251,12 +253,14 @@ def classify_disclosure_title(
         category = "増配・復配"
     elif "配当予想" in normalized_title:
         category = "配当予想"
+    elif is_plan_disclosure:
+        category = "中期経営計画"
     else:
         category = "配当・株主還元"
 
     return (
         category,
-        is_policy_candidate,
+        is_policy_candidate or is_plan_disclosure,
         matched_keywords,
     )
 

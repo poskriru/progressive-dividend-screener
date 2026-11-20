@@ -199,6 +199,60 @@ class TdnetPolicyConfirmedTest(unittest.TestCase):
             POLICY_CLASSIFICATION_CONFIRMED,
         )
 
+    def test_consecutive_dividend_increase_is_confirmed(
+        self,
+    ) -> None:
+        result = classify_policy_pages(
+            [
+                (
+                    "当社は中期経営計画において、"
+                    "連続増配を継続します。"
+                )
+            ]
+        )
+
+        self.assertEqual(
+            result.classification,
+            POLICY_CLASSIFICATION_CONFIRMED,
+        )
+        self.assertIsNotNone(result.evidence)
+        self.assertIn(
+            "連続増配",
+            result.evidence.matched_phrase,
+        )
+
+    def test_consecutive_dividend_increase_with_years_is_confirmed(
+        self,
+    ) -> None:
+        result = classify_policy_pages(
+            [
+                "2026年11月13日 決算説明会資料より、"
+                "3年連続増配を実現しました。"
+            ]
+        )
+
+        self.assertEqual(
+            result.classification,
+            POLICY_CLASSIFICATION_CONFIRMED,
+        )
+
+    def test_continued_dividend_increase_is_confirmed(
+        self,
+    ) -> None:
+        result = classify_policy_pages(
+            [
+                (
+                    "配当については、"
+                    "増配を継続する方針です。"
+                )
+            ]
+        )
+
+        self.assertEqual(
+            result.classification,
+            POLICY_CLASSIFICATION_CONFIRMED,
+        )
+
     def test_spaced_pdf_text_is_confirmed(
         self,
     ) -> None:
@@ -271,6 +325,24 @@ class TdnetPolicyManualReviewTest(
         result = classify_policy_pages(
             [
                 "今後、累進配当の導入を検討します。"
+            ]
+        )
+
+        self.assertEqual(
+            result.classification,
+            POLICY_CLASSIFICATION_MANUAL_REVIEW,
+        )
+        self.assertIsNotNone(result.evidence)
+
+    def test_consecutive_dividend_increase_goal_requires_manual_review(
+        self,
+    ) -> None:
+        result = classify_policy_pages(
+            [
+                (
+                    "中期経営計画において"
+                    "連続増配を目指します。"
+                )
             ]
         )
 
