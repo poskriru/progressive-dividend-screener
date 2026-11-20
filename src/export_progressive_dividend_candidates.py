@@ -94,6 +94,16 @@ CANDIDATE_CRITERIA_DESCRIPTIONS = {
     "CANDIDATE_MIN_ROE_PERCENT": (
         "ROEの下限（%）。"
     ),
+    "CANDIDATE_MAX_PER_DISCOUNT_YEARS": (
+        "PER割安度（年）の上限。"
+        "(時価総額×(100%−自社株保有比率%)−ネットキャッシュ)"
+        "÷当期純利益。"
+        "ネットキャッシュは流動資産＋投資有価証券×70%−負債。"
+    ),
+    "CANDIDATE_MIN_INVESTMENT_EFFICIENCY": (
+        "投資効率（10年）の下限。"
+        "(EPS×10＋BPS)÷株価。"
+    ),
     "CANDIDATE_REQUIRE_POSITIVE_FREE_CASH_FLOW": (
         "フリーCFをプラス必須にするか。trueまたはfalse。"
     ),
@@ -127,6 +137,10 @@ CANDIDATE_HEADERS = [
     "PBR（倍）",
     "ROE（%）",
     "自己資本比率（%）",
+    "PER割安度（年）",
+    "投資効率（10年）",
+    "ネットキャッシュ（百万円）",
+    "自社株保有比率（%）",
     "フリーCF（百万円）",
     "5期配当CAGR（%）",
     "5期増配回数",
@@ -179,6 +193,10 @@ CANDIDATE_COLUMN_FORMATS_BY_HEADER: dict[str, str] = {
     "PBR（倍）": "0.##",
     "ROE（%）": "0.00",
     "自己資本比率（%）": "0.00",
+    "PER割安度（年）": "0.00",
+    "投資効率（10年）": "0.00",
+    "ネットキャッシュ（百万円）": "#,##0.0",
+    "自社株保有比率（%）": "0.00",
     "フリーCF（百万円）": "#,##0.0",
     "5期配当CAGR（%）": "0.00",
     "5期増配回数": "#,##0",
@@ -204,6 +222,8 @@ DEFAULT_MAX_PAYOUT_RATIO_PERCENT = Decimal("70.0")
 DEFAULT_MAX_PER_RATIO = Decimal("25.0")
 DEFAULT_MAX_PBR_RATIO = Decimal("3.0")
 DEFAULT_MIN_ROE_PERCENT = Decimal("8.0")
+DEFAULT_MAX_PER_DISCOUNT_YEARS = Decimal("5.5")
+DEFAULT_MIN_INVESTMENT_EFFICIENCY = Decimal("1.7")
 DEFAULT_REQUIRE_POSITIVE_FREE_CASH_FLOW = True
 DEFAULT_MAX_CANDIDATES = 300
 
@@ -224,6 +244,8 @@ class CandidateCriteria:
     max_per_ratio: Decimal
     max_pbr_ratio: Decimal
     min_roe_percent: Decimal
+    max_per_discount_years: Decimal
+    min_investment_efficiency: Decimal
     require_positive_free_cash_flow: bool
     max_candidates: int
 
@@ -258,6 +280,14 @@ class CandidateCriteria:
             min_roe_percent=get_decimal_environment(
                 "CANDIDATE_MIN_ROE_PERCENT",
                 DEFAULT_MIN_ROE_PERCENT,
+            ),
+            max_per_discount_years=get_decimal_environment(
+                "CANDIDATE_MAX_PER_DISCOUNT_YEARS",
+                DEFAULT_MAX_PER_DISCOUNT_YEARS,
+            ),
+            min_investment_efficiency=get_decimal_environment(
+                "CANDIDATE_MIN_INVESTMENT_EFFICIENCY",
+                DEFAULT_MIN_INVESTMENT_EFFICIENCY,
             ),
             require_positive_free_cash_flow=get_boolean_environment(
                 "CANDIDATE_REQUIRE_POSITIVE_FREE_CASH_FLOW",
@@ -310,6 +340,18 @@ class CandidateCriteria:
                 "CANDIDATE_MIN_ROE_PERCENT",
                 settings["CANDIDATE_MIN_ROE_PERCENT"],
             ),
+            max_per_discount_years=parse_decimal_setting(
+                "CANDIDATE_MAX_PER_DISCOUNT_YEARS",
+                settings[
+                    "CANDIDATE_MAX_PER_DISCOUNT_YEARS"
+                ],
+            ),
+            min_investment_efficiency=parse_decimal_setting(
+                "CANDIDATE_MIN_INVESTMENT_EFFICIENCY",
+                settings[
+                    "CANDIDATE_MIN_INVESTMENT_EFFICIENCY"
+                ],
+            ),
             require_positive_free_cash_flow=(
                 parse_boolean_setting(
                     "CANDIDATE_REQUIRE_POSITIVE_FREE_CASH_FLOW",
@@ -345,6 +387,12 @@ class CandidateCriteria:
             "CANDIDATE_MIN_ROE_PERCENT": str(
                 self.min_roe_percent
             ),
+            "CANDIDATE_MAX_PER_DISCOUNT_YEARS": str(
+                self.max_per_discount_years
+            ),
+            "CANDIDATE_MIN_INVESTMENT_EFFICIENCY": str(
+                self.min_investment_efficiency
+            ),
             "CANDIDATE_REQUIRE_POSITIVE_FREE_CASH_FLOW": (
                 "true"
                 if self.require_positive_free_cash_flow
@@ -371,6 +419,8 @@ class CandidateCriteria:
             f"PER=0超〜{self.max_per_ratio}, "
             f"PBR=0超〜{self.max_pbr_ratio}, "
             f"ROE>={self.min_roe_percent}%, "
+            f"PER割安度<={self.max_per_discount_years}年, "
+            f"投資効率>={self.min_investment_efficiency}, "
             f"フリーCF={free_cash_flow_condition}, "
             f"最大{self.max_candidates}件"
         )
@@ -704,12 +754,43 @@ def load_candidate_criteria_from_sheet(
 
         settings[name] = value
 
-    missing_names = allowed_names - set(settings)
+    missing_names = sorted(
+        allowed_names - set(settings)
+    )
 
     if missing_names:
-        raise RuntimeError(
-            "累進配当条件シートに必要な設定がありません。"
-            f"不足設定: {sorted(missing_names)}"
+        # ====================================================
+        # 新しい設定項目は既定値の行を自動追加する。
+        #
+        # 条件シートはユーザーが変更するため、
+        # 既存行は壊さず不足行だけを補う。
+        # ====================================================
+
+        default_settings = (
+            CandidateCriteria.from_environment()
+        ).to_settings()
+
+        for name in missing_names:
+            settings[name] = default_settings[name]
+
+        all_rows = build_candidate_criteria_rows(
+            CandidateCriteria.from_settings(
+                settings
+            )
+        )
+
+        write_sheet(
+            sheets_service,
+            spreadsheet_id,
+            CANDIDATE_CRITERIA_SHEET_NAME,
+            CANDIDATE_CRITERIA_HEADERS,
+            all_rows,
+        )
+
+        print(
+            "累進配当条件シートに"
+            "不足設定を既定値で追加しました。"
+            f"追加設定: {missing_names}"
         )
 
     criteria = CandidateCriteria.from_settings(
@@ -746,6 +827,10 @@ def load_progressive_dividend_candidates(
             pbr_ratio,
             roe_percent,
             equity_ratio_percent,
+            per_undervaluation_years,
+            investment_efficiency_10y,
+            net_cash_jpy,
+            treasury_shares_ratio_percent,
             free_cash_flow_jpy,
             dividend_cagr_5y_percent,
             dividend_increase_count_5y,
@@ -780,6 +865,10 @@ def load_progressive_dividend_candidates(
           AND pbr_ratio > 0
           AND pbr_ratio <= %s
           AND roe_percent >= %s
+          AND per_undervaluation_years IS NOT NULL
+          AND per_undervaluation_years <= %s
+          AND investment_efficiency_10y IS NOT NULL
+          AND investment_efficiency_10y >= %s
           AND (%s = FALSE OR free_cash_flow_jpy > 0)
         ORDER BY
             dividend_yield_percent DESC NULLS LAST,
@@ -799,6 +888,8 @@ def load_progressive_dividend_candidates(
         criteria.max_per_ratio,
         criteria.max_pbr_ratio,
         criteria.min_roe_percent,
+        criteria.max_per_discount_years,
+        criteria.min_investment_efficiency,
         criteria.require_positive_free_cash_flow,
         criteria.max_candidates,
     )
@@ -892,6 +983,24 @@ def build_candidate_rows(
             to_sheet_number(
                 record.get(
                     "equity_ratio_percent"
+                )
+            ),
+            to_sheet_number(
+                record.get(
+                    "per_undervaluation_years"
+                )
+            ),
+            to_sheet_number(
+                record.get(
+                    "investment_efficiency_10y"
+                )
+            ),
+            yen_to_sheet_million(
+                record.get("net_cash_jpy")
+            ),
+            to_sheet_number(
+                record.get(
+                    "treasury_shares_ratio_percent"
                 )
             ),
             yen_to_sheet_million(
@@ -1496,6 +1605,34 @@ def diagnose_candidate_exclusion(
             f"ROEが下限未満（{roe_percent:.2f}%）"
         )
 
+    per_undervaluation = to_finite_decimal(
+        record.get("per_undervaluation_years")
+    )
+    if per_undervaluation is None:
+        reasons.append("PER割安度算出不可")
+    elif (
+        per_undervaluation
+        > criteria.max_per_discount_years
+    ):
+        reasons.append(
+            "PER割安度が上限超過"
+            f"（{per_undervaluation:.2f}年）"
+        )
+
+    investment_efficiency = to_finite_decimal(
+        record.get("investment_efficiency_10y")
+    )
+    if investment_efficiency is None:
+        reasons.append("投資効率算出不可")
+    elif (
+        investment_efficiency
+        < criteria.min_investment_efficiency
+    ):
+        reasons.append(
+            "投資効率が下限未満"
+            f"（{investment_efficiency:.2f}）"
+        )
+
     if criteria.require_positive_free_cash_flow:
         free_cash_flow = to_finite_decimal(
             record.get("free_cash_flow_jpy")
@@ -1543,6 +1680,8 @@ def load_removed_candidate_reasons(
             per_ratio,
             pbr_ratio,
             roe_percent,
+            per_undervaluation_years,
+            investment_efficiency_10y,
             free_cash_flow_jpy
         FROM screener.company_screener_with_dividends
         WHERE security_code = ANY(%s)

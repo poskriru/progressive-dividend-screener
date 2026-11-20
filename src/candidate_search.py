@@ -44,6 +44,8 @@ DEFAULT_SEARCH_MAX_PAYOUT_RATIO_PERCENT = Decimal("70.0")
 DEFAULT_SEARCH_MAX_PER_RATIO = Decimal("25.0")
 DEFAULT_SEARCH_MAX_PBR_RATIO = Decimal("3.0")
 DEFAULT_SEARCH_MIN_ROE_PERCENT = Decimal("8.0")
+DEFAULT_SEARCH_MAX_PER_DISCOUNT_YEARS = Decimal("5.5")
+DEFAULT_SEARCH_MIN_INVESTMENT_EFFICIENCY = Decimal("1.7")
 DEFAULT_SEARCH_REQUIRE_POSITIVE_FREE_CASH_FLOW = True
 DEFAULT_SEARCH_MAX_RESULTS = 10
 
@@ -71,6 +73,12 @@ class CandidateSearchRequest:
     max_per_ratio: Decimal = DEFAULT_SEARCH_MAX_PER_RATIO
     max_pbr_ratio: Decimal = DEFAULT_SEARCH_MAX_PBR_RATIO
     min_roe_percent: Decimal = DEFAULT_SEARCH_MIN_ROE_PERCENT
+    max_per_discount_years: Decimal = (
+        DEFAULT_SEARCH_MAX_PER_DISCOUNT_YEARS
+    )
+    min_investment_efficiency: Decimal = (
+        DEFAULT_SEARCH_MIN_INVESTMENT_EFFICIENCY
+    )
     require_positive_free_cash_flow: bool = (
         DEFAULT_SEARCH_REQUIRE_POSITIVE_FREE_CASH_FLOW
     )
@@ -102,6 +110,14 @@ class CandidateSearchRequest:
             (
                 "min_roe_percent",
                 self.min_roe_percent,
+            ),
+            (
+                "max_per_discount_years",
+                self.max_per_discount_years,
+            ),
+            (
+                "min_investment_efficiency",
+                self.min_investment_efficiency,
             ),
         )
 
@@ -189,6 +205,12 @@ class CandidateSearchRequest:
             max_per_ratio=self.max_per_ratio,
             max_pbr_ratio=self.max_pbr_ratio,
             min_roe_percent=self.min_roe_percent,
+            max_per_discount_years=(
+                self.max_per_discount_years
+            ),
+            min_investment_efficiency=(
+                self.min_investment_efficiency
+            ),
             require_positive_free_cash_flow=(
                 self.require_positive_free_cash_flow
             ),
@@ -593,6 +615,10 @@ def build_candidate_search_condition_line(
         " / "
         f"ROE{request.min_roe_percent}%以上"
         " / "
+        f"PER割安度{request.max_per_discount_years}年以下"
+        " / "
+        f"投資効率{request.min_investment_efficiency}以上"
+        " / "
         f"フリーCF{free_cash_flow_condition}"
         " / "
         f"最大{request.max_results}件"
@@ -651,6 +677,13 @@ def build_candidate_search_result_line(
         record.get("roe_percent"),
         suffix="%",
     )
+    per_undervaluation = format_search_decimal(
+        record.get("per_undervaluation_years"),
+        suffix="年",
+    )
+    investment_efficiency = format_search_decimal(
+        record.get("investment_efficiency_10y"),
+    )
     dividend_cagr = format_search_decimal(
         record.get("dividend_cagr_5y_adjusted_percent"),
         suffix="%",
@@ -687,6 +720,8 @@ def build_candidate_search_result_line(
         f" / PER {per_ratio}"
         f" / PBR {pbr_ratio}"
         f" / ROE {roe_percent}"
+        f" / PER割安度 {per_undervaluation}"
+        f" / 投資効率 {investment_efficiency}"
         f"{source_label}"
     )
 

@@ -48,7 +48,8 @@ class CandidateSortTests(unittest.TestCase):
                 )
                 self.assertEqual(parameters, (
                     Decimal("3.0"), Decimal("70.0"), Decimal("25.0"),
-                    Decimal("3.0"), Decimal("8.0"), True, 6,
+                    Decimal("3.0"), Decimal("8.0"),
+                    Decimal("5.5"), Decimal("1.7"), True, 6,
                 ))
 
     def test_repository_rejects_untrusted_sort(self):
@@ -56,6 +57,7 @@ class CandidateSortTests(unittest.TestCase):
             CandidateCriteria(
                 Decimal("3"), Decimal("70"), Decimal("25"),
                 Decimal("3"), Decimal("8"), True, 10,
+                Decimal("5.5"), Decimal("1.7"),
                 sort_by="roe DESC; DROP TABLE x",
             )
 

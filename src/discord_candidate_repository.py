@@ -66,6 +66,8 @@ class CandidateCriteria:
     min_roe_percent: Decimal
     require_positive_free_cash_flow: bool
     max_candidates: int
+    max_per_discount_years: Decimal
+    min_investment_efficiency: Decimal
     sort_by: str = DEFAULT_CANDIDATE_SORT_BY
 
     def __post_init__(self) -> None:
@@ -113,6 +115,8 @@ def load_progressive_dividend_candidates(
             pbr_ratio,
             roe_percent,
             equity_ratio_percent,
+            per_undervaluation_years,
+            investment_efficiency_10y,
             free_cash_flow_jpy,
             dividend_cagr_5y_percent,
             dividend_increase_count_5y,
@@ -147,6 +151,10 @@ def load_progressive_dividend_candidates(
           AND pbr_ratio > 0
           AND pbr_ratio <= %s
           AND roe_percent >= %s
+          AND per_undervaluation_years IS NOT NULL
+          AND per_undervaluation_years <= %s
+          AND investment_efficiency_10y IS NOT NULL
+          AND investment_efficiency_10y >= %s
           AND (%s = FALSE OR free_cash_flow_jpy > 0)
         ORDER BY {order_by}
         LIMIT %s;
@@ -158,6 +166,8 @@ def load_progressive_dividend_candidates(
         criteria.max_per_ratio,
         criteria.max_pbr_ratio,
         criteria.min_roe_percent,
+        criteria.max_per_discount_years,
+        criteria.min_investment_efficiency,
         criteria.require_positive_free_cash_flow,
         criteria.max_candidates,
     )
