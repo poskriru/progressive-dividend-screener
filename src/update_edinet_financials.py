@@ -523,11 +523,15 @@ METRIC_DEFINITIONS = {
     },
     "treasury_shares": {
         "element_ids": [
+            "TotalNumberOfSharesHeldTreasurySharesEtc",
+            "NumberOfSharesHeldInOwnNameTreasurySharesEtc",
+            "NumberOfSharesHeldInOthersNamesTreasurySharesEtc",
             "NumberOfTreasuryStockAsOfFiscalYearEnd",
             "NumberOfTreasuryStockAtTheEndOfFiscalYear",
             "TreasuryStockNumberOfSharesAtTheEndOfFiscalYear",
         ],
         "labels": [
+            "所有株式数の合計（株）、自己株式等",
             "自己株式",
             "自己株式数",
         ],
@@ -540,6 +544,9 @@ METRIC_DEFINITIONS = {
         ],
         "kind": "number",
         "expected_unit": "shares",
+        # B/S貸方の自己株式（円）を株数として
+        # 誤採用しないため、単位一致を必須にする。
+        "require_unit_match": True,
         "prefer_consolidated": False,
     },
 }
@@ -3304,6 +3311,23 @@ def extract_metric(
         ):
             continue
 
+        # ====================================================
+        # 単位一致を必須にする項目の確認
+        #
+        # 自己株式のように、項目名が同じでも
+        # 金額（円）と株数が混在する項目があるため、
+        # 定義側でrequire_unit_matchを指定した場合は
+        # 単位が一致しないファクトを採用しない。
+        # ====================================================
+
+        if definition.get(
+            "require_unit_match"
+        ) and not fact_matches_expected_unit(
+            fact,
+            definition,
+        ):
+            continue
+
         value_text = get_fact_value(
             fact,
             [
@@ -3487,6 +3511,25 @@ def extract_metric(
                 == "TotalNumberOfIssuedSharesSummaryOfBusinessResults"
             ):
                 score += 100
+
+            # =================================================
+            # 自己株式数は合計数を優先
+            #
+            # 名義書換中・名義書換外の内訳要素は
+            # 合計要素が存在する場合は候補から外す。
+            # =================================================
+
+            if (
+                element_suffix
+                == "TotalNumberOfSharesHeldTreasurySharesEtc"
+            ):
+                score += 150
+
+            if element_suffix in {
+                "NumberOfSharesHeldInOwnNameTreasurySharesEtc",
+                "NumberOfSharesHeldInOthersNamesTreasurySharesEtc",
+            }:
+                score -= 150
 
         candidates.append(
             {
