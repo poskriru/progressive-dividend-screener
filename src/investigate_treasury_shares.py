@@ -152,7 +152,7 @@ def main() -> None:
         for (
             (element_id, unit, unit_id),
             count,
-        ), description in sorted(
+        ) in sorted(
             doc_counter.items(),
             key=lambda item: -item[1],
         ):
