@@ -23,7 +23,7 @@ from typing import Iterable
 # 定数
 # ============================================================
 
-ANALYZER_VERSION = "v2"
+ANALYZER_VERSION = "v3"
 
 POLICY_CLASSIFICATION_CONFIRMED = "confirmed"
 POLICY_CLASSIFICATION_NOT_CONFIRMED = "not_confirmed"
@@ -35,6 +35,8 @@ POLICY_TARGET_TERMS = (
     "累進配当",
     "減配を行わない",
     "減配は行わない",
+    "連続増配",
+    "増配を継続",
 )
 
 CONFIRMED_POLICY_PATTERNS = (
@@ -61,6 +63,8 @@ CONFIRMED_POLICY_PATTERNS = (
     re.compile(
         r"原則として減配は行わない"
     ),
+    re.compile(r"連続増配"),
+    re.compile(r"増配を継続"),
 )
 
 MANUAL_REVIEW_MARKERS = (
