@@ -142,6 +142,44 @@ class ClassifyDisclosureTitleTest(
             is_policy_candidate,
         )
 
+    def test_explanation_meeting_title_is_policy_candidate(
+        self,
+    ) -> None:
+        (
+            category,
+            is_policy_candidate,
+            _,
+        ) = classify_disclosure_title(
+            "2027年3月期第2四半期 決算説明会資料"
+        )
+
+        self.assertEqual(
+            category,
+            "決算説明会",
+        )
+        self.assertTrue(
+            is_policy_candidate,
+        )
+
+    def test_shareholder_return_title_is_policy_candidate(
+        self,
+    ) -> None:
+        (
+            category,
+            is_policy_candidate,
+            _,
+        ) = classify_disclosure_title(
+            "株主還元に関するお知らせ"
+        )
+
+        self.assertEqual(
+            category,
+            "配当・株主還元方針",
+        )
+        self.assertTrue(
+            is_policy_candidate,
+        )
+
     def test_unrelated_title_is_not_captured(
         self,
     ) -> None:
