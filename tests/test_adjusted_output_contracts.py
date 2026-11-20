@@ -84,21 +84,35 @@ class OutputContractTest(unittest.TestCase):
     def test_candidate_analysis_columns_are_inserted_after_policy_url(
         self,
     ) -> None:
+        # 新しい評価指標4列は自己資本比率（14列目）の直後に配置する。
         self.assertEqual(
-            CANDIDATE_HEADERS[:28],
-            LEGACY_CANDIDATE_HEADERS[:28],
+            CANDIDATE_HEADERS[:14],
+            LEGACY_CANDIDATE_HEADERS[:14],
         )
         self.assertEqual(
-            CANDIDATE_HEADERS[28:34],
+            CANDIDATE_HEADERS[14:18],
+            [
+                "PER割安度（年）",
+                "投資効率（10年）",
+                "ネットキャッシュ（百万円）",
+                "自社株保有比率（%）",
+            ],
+        )
+        self.assertEqual(
+            CANDIDATE_HEADERS[18:32],
+            LEGACY_CANDIDATE_HEADERS[14:28],
+        )
+        self.assertEqual(
+            CANDIDATE_HEADERS[32:38],
             self.TDNET_POLICY_ANALYSIS_HEADERS,
         )
         self.assertEqual(
-            CANDIDATE_HEADERS[34:40],
+            CANDIDATE_HEADERS[38:44],
             LEGACY_CANDIDATE_HEADERS[28:34],
         )
         self.assertEqual(
             len(CANDIDATE_HEADERS),
-            51,
+            55,
         )
 
     def test_indicator_row_keeps_raw_and_adjusted_history(
@@ -177,19 +191,19 @@ class OutputContractTest(unittest.TestCase):
             [record]
         )[0]
 
-        self.assertEqual(len(row), 51)
-        self.assertEqual(row[28], "completed")
-        self.assertEqual(row[29], "confirmed")
+        self.assertEqual(len(row), 55)
+        self.assertEqual(row[32], "completed")
+        self.assertEqual(row[33], "confirmed")
         self.assertEqual(
-            row[30],
+            row[34],
             "累進配当の導入",
         )
         self.assertEqual(
-            row[31],
+            row[35],
             "累進配当の導入に関するお知らせ",
         )
-        self.assertEqual(row[32], 1)
-        self.assertEqual(row[33], "v2")
+        self.assertEqual(row[36], 1)
+        self.assertEqual(row[37], "v2")
 
     def test_candidate_note_identifies_selected_decision(
         self,
@@ -215,19 +229,19 @@ class OutputContractTest(unittest.TestCase):
         )[0]
 
         self.assertEqual(
-            raw_row[39],
+            raw_row[43],
             RAW_DIVIDEND_CAUTION,
         )
         self.assertEqual(
-            raw_row[40],
+            raw_row[44],
             "raw",
         )
         self.assertEqual(
-            adjusted_row[39],
+            adjusted_row[43],
             ADJUSTED_DIVIDEND_NOTE,
         )
         self.assertEqual(
-            adjusted_row[40],
+            adjusted_row[44],
             "adjusted",
         )
 
@@ -239,6 +253,8 @@ class CandidateDecisionTest(unittest.TestCase):
             max_per_ratio=Decimal("25"),
             max_pbr_ratio=Decimal("3"),
             min_roe_percent=Decimal("8"),
+            max_per_discount_years=Decimal("5.5"),
+            min_investment_efficiency=Decimal("1.7"),
             require_positive_free_cash_flow=True,
             max_candidates=300,
         )

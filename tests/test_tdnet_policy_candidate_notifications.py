@@ -184,6 +184,8 @@ class TdnetPolicyCandidateNotificationTest(
             max_per_ratio=Decimal("25"),
             max_pbr_ratio=Decimal("3"),
             min_roe_percent=Decimal("8"),
+            max_per_discount_years=Decimal("5.5"),
+            min_investment_efficiency=Decimal("1.7"),
             require_positive_free_cash_flow=True,
             max_candidates=300,
         )
@@ -245,6 +247,8 @@ class TdnetPolicyCandidateNotificationTest(
             max_per_ratio=Decimal("25"),
             max_pbr_ratio=Decimal("3"),
             min_roe_percent=Decimal("8"),
+            max_per_discount_years=Decimal("5.5"),
+            min_investment_efficiency=Decimal("1.7"),
             require_positive_free_cash_flow=True,
             max_candidates=300,
         )
@@ -375,6 +379,8 @@ class ExclusionReasonSummaryTest(unittest.TestCase):
             max_per_ratio=Decimal("25"),
             max_pbr_ratio=Decimal("3"),
             min_roe_percent=Decimal("8"),
+            max_per_discount_years=Decimal("5.5"),
+            min_investment_efficiency=Decimal("1.7"),
             require_positive_free_cash_flow=True,
             max_candidates=300,
         )

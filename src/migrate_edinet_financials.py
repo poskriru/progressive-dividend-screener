@@ -781,6 +781,32 @@ def build_financial_database_records(
                         "発行済株式数"
                     )
                 ),
+                "current_assets_jpy": (
+                    parse_million_yen(
+                        row.get(
+                            "流動資産（百万円）"
+                        )
+                    )
+                ),
+                "investment_securities_jpy": (
+                    parse_million_yen(
+                        row.get(
+                            "投資有価証券（百万円）"
+                        )
+                    )
+                ),
+                "liabilities_jpy": (
+                    parse_million_yen(
+                        row.get(
+                            "負債合計（百万円）"
+                        )
+                    )
+                ),
+                "treasury_shares": parse_integer(
+                    row.get(
+                        "自己株式数"
+                    )
+                ),
                                 "revenue_element_id": (
                     normalize_text(
                         row.get(
@@ -897,6 +923,38 @@ def build_financial_database_records(
                     normalize_text(
                         row.get(
                             "発行済株式数要素ID"
+                        )
+                    )
+                    or None
+                ),
+                "current_assets_element_id": (
+                    normalize_text(
+                        row.get(
+                            "流動資産要素ID"
+                        )
+                    )
+                    or None
+                ),
+                "investment_securities_element_id": (
+                    normalize_text(
+                        row.get(
+                            "投資有価証券要素ID"
+                        )
+                    )
+                    or None
+                ),
+                "liabilities_element_id": (
+                    normalize_text(
+                        row.get(
+                            "負債合計要素ID"
+                        )
+                    )
+                    or None
+                ),
+                "treasury_shares_element_id": (
+                    normalize_text(
+                        row.get(
+                            "自己株式数要素ID"
                         )
                     )
                     or None
@@ -1034,6 +1092,10 @@ def save_financials_to_database(
             bps_yen,
             annual_dividend_yen,
             issued_shares,
+            current_assets_jpy,
+            investment_securities_jpy,
+            liabilities_jpy,
+            treasury_shares,
             revenue_element_id,
             operating_profit_element_id,
             ordinary_profit_element_id,
@@ -1049,6 +1111,10 @@ def save_financials_to_database(
             bps_element_id,
             dividend_element_id,
             issued_shares_element_id,
+            current_assets_element_id,
+            investment_securities_element_id,
+            liabilities_element_id,
+            treasury_shares_element_id,
             extracted_item_count,
             extraction_status,
             extraction_error,
@@ -1079,6 +1145,10 @@ def save_financials_to_database(
             %(bps_yen)s,
             %(annual_dividend_yen)s,
             %(issued_shares)s,
+            %(current_assets_jpy)s,
+            %(investment_securities_jpy)s,
+            %(liabilities_jpy)s,
+            %(treasury_shares)s,
             %(revenue_element_id)s,
             %(operating_profit_element_id)s,
             %(ordinary_profit_element_id)s,
@@ -1094,6 +1164,10 @@ def save_financials_to_database(
             %(bps_element_id)s,
             %(dividend_element_id)s,
             %(issued_shares_element_id)s,
+            %(current_assets_element_id)s,
+            %(investment_securities_element_id)s,
+            %(liabilities_element_id)s,
+            %(treasury_shares_element_id)s,
             %(extracted_item_count)s,
             %(extraction_status)s,
             %(extraction_error)s,
@@ -1212,6 +1286,30 @@ def save_financials_to_database(
                     screener.annual_financials
                         .issued_shares
                 ),
+            current_assets_jpy =
+                COALESCE(
+                    EXCLUDED.current_assets_jpy,
+                    screener.annual_financials
+                        .current_assets_jpy
+                ),
+            investment_securities_jpy =
+                COALESCE(
+                    EXCLUDED.investment_securities_jpy,
+                    screener.annual_financials
+                        .investment_securities_jpy
+                ),
+            liabilities_jpy =
+                COALESCE(
+                    EXCLUDED.liabilities_jpy,
+                    screener.annual_financials
+                        .liabilities_jpy
+                ),
+            treasury_shares =
+                COALESCE(
+                    EXCLUDED.treasury_shares,
+                    screener.annual_financials
+                        .treasury_shares
+                ),
             revenue_element_id =
                 COALESCE(
                     EXCLUDED.revenue_element_id,
@@ -1301,6 +1399,30 @@ def save_financials_to_database(
                     EXCLUDED.issued_shares_element_id,
                     screener.annual_financials
                         .issued_shares_element_id
+                ),
+            current_assets_element_id =
+                COALESCE(
+                    EXCLUDED.current_assets_element_id,
+                    screener.annual_financials
+                        .current_assets_element_id
+                ),
+            investment_securities_element_id =
+                COALESCE(
+                    EXCLUDED.investment_securities_element_id,
+                    screener.annual_financials
+                        .investment_securities_element_id
+                ),
+            liabilities_element_id =
+                COALESCE(
+                    EXCLUDED.liabilities_element_id,
+                    screener.annual_financials
+                        .liabilities_element_id
+                ),
+            treasury_shares_element_id =
+                COALESCE(
+                    EXCLUDED.treasury_shares_element_id,
+                    screener.annual_financials
+                        .treasury_shares_element_id
                 ),
             extracted_item_count =
                 EXCLUDED.extracted_item_count,

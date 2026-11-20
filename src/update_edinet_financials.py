@@ -88,6 +88,10 @@ FINANCIAL_HEADERS = [
     "BPS（円）",
     "1株配当（円）",
     "発行済株式数",
+    "流動資産（百万円）",
+    "投資有価証券（百万円）",
+    "負債合計（百万円）",
+    "自己株式数",
     "抽出項目数",
     "抽出状態",
     "抽出エラー",
@@ -106,6 +110,10 @@ FINANCIAL_HEADERS = [
     "BPS要素ID",
     "配当要素ID",
     "発行済株式数要素ID",
+    "流動資産要素ID",
+    "投資有価証券要素ID",
+    "負債合計要素ID",
+    "自己株式数要素ID",
     "CSVファイル",
     "データ出典",
     "EDINET閲覧URL",
@@ -459,6 +467,76 @@ METRIC_DEFINITIONS = {
             "潜在株式",
             "自己株式",
             "新株予約権",
+        ],
+        "kind": "number",
+        "expected_unit": "shares",
+        "prefer_consolidated": False,
+    },
+    "current_assets": {
+        "element_ids": [
+            "CurrentAssets",
+            "CurrentAssetsIFRS",
+        ],
+        "labels": [
+            "流動資産",
+            "流動資産合計",
+            "流動資産計",
+        ],
+        "excluded_label_patterns": [
+            "純流動資産",
+        ],
+        "kind": "money",
+        "prefer_consolidated": True,
+    },
+    "investment_securities": {
+        "element_ids": [
+            "InvestmentSecurities",
+            "InvestmentSecuritiesIFRS",
+        ],
+        "labels": [
+            "投資有価証券",
+        ],
+        "excluded_label_patterns": [
+            "売買目的",
+            "純資産",
+        ],
+        "kind": "money",
+        "prefer_consolidated": True,
+    },
+    "liabilities": {
+        "element_ids": [
+            "Liabilities",
+            "LiabilitiesIFRS",
+        ],
+        "labels": [
+            "負債合計",
+            "負債の合計",
+        ],
+        "excluded_label_patterns": [
+            "流動負債",
+            "固定負債",
+            "負債純資産",
+            "退職給付",
+        ],
+        "kind": "money",
+        "prefer_consolidated": True,
+    },
+    "treasury_shares": {
+        "element_ids": [
+            "NumberOfTreasuryStockAsOfFiscalYearEnd",
+            "NumberOfTreasuryStockAtTheEndOfFiscalYear",
+            "TreasuryStockNumberOfSharesAtTheEndOfFiscalYear",
+        ],
+        "labels": [
+            "自己株式",
+            "自己株式数",
+        ],
+        "excluded_label_patterns": [
+            "潜在株式",
+            "新株予約権",
+            "提出日現在",
+            "平均",
+            "議決権",
         ],
         "kind": "number",
         "expected_unit": "shares",
@@ -3564,6 +3642,10 @@ def metric_source_files(
         "total_assets",
         "net_assets",
         "equity",
+        "current_assets",
+        "investment_securities",
+        "liabilities",
+        "treasury_shares",
         "operating_cf",
         "investing_cf",
         "financing_cf",
@@ -3843,6 +3925,37 @@ def build_financial_row(
             ),
             0,
         ),
+        safe_round(
+            yen_to_million(
+                metric_value(
+                    metrics,
+                    "current_assets",
+                )
+            )
+        ),
+        safe_round(
+            yen_to_million(
+                metric_value(
+                    metrics,
+                    "investment_securities",
+                )
+            )
+        ),
+        safe_round(
+            yen_to_million(
+                metric_value(
+                    metrics,
+                    "liabilities",
+                )
+            )
+        ),
+        safe_round(
+            metric_value(
+                metrics,
+                "treasury_shares",
+            ),
+            0,
+        ),
         extracted_count,
         status,
         error_message[:1000],
@@ -3905,6 +4018,22 @@ def build_financial_row(
         metric_element_id(
             metrics,
             "shares_issued",
+        ),
+        metric_element_id(
+            metrics,
+            "current_assets",
+        ),
+        metric_element_id(
+            metrics,
+            "investment_securities",
+        ),
+        metric_element_id(
+            metrics,
+            "liabilities",
+        ),
+        metric_element_id(
+            metrics,
+            "treasury_shares",
         ),
         metric_source_files(metrics),
         "金融庁EDINET API",
