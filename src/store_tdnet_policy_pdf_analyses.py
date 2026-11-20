@@ -52,6 +52,7 @@ ANALYSIS_STATUS_TEXT_EXTRACTION_FAILED = (
 
 REQUEST_INTERVAL_SECONDS = 0.5
 MAXIMUM_ERROR_LENGTH = 2000
+MAXIMUM_TARGETS_PER_RUN = 100
 
 SECURITY_CODE_PATTERN = re.compile(
     r"^[0-9A-Z]{4}$"
@@ -716,7 +717,10 @@ def process_tdnet_policy_pdf_targets(
         )
 
         summary["processing_target_count"] = (
-            selection_summary["selected_count"]
+            min(
+                len(selected_targets),
+                MAXIMUM_TARGETS_PER_RUN,
+            )
         )
         summary["completed_skipped_count"] = (
             selection_summary[
@@ -728,6 +732,25 @@ def process_tdnet_policy_pdf_targets(
                 "retry_exhausted_count"
             ]
         )
+        summary["deferred_target_count"] = max(
+            0,
+            len(selected_targets)
+            - MAXIMUM_TARGETS_PER_RUN,
+        )
+
+        if summary["deferred_target_count"]:
+            print(
+                "TDnet PDF本文解析対象が"
+                "1回の実行上限を超えました。"
+                "残りは次回実行時に処理します。"
+                f"今回処理: "
+                f"{MAXIMUM_TARGETS_PER_RUN:,}, "
+                "次回持ち越し: "
+                f"{summary['deferred_target_count']:,}"
+            )
+            selected_targets = selected_targets[
+                :MAXIMUM_TARGETS_PER_RUN
+            ]
 
         if not selected_targets:
             print(
