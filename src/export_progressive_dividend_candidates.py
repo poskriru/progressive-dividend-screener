@@ -55,12 +55,20 @@ from update_edinet_financials import (
     send_discord_notification,
     write_sheet,
 )
-
 from enrich_tdnet_policy_candidates import (
     enrich_candidates_with_tdnet_policy_results,
 )
+
+from enrich_edinet_policy_candidates import (
+    enrich_candidates_with_edinet_policy_results,
+)
+
 from load_latest_tdnet_policy_results import (
     load_latest_tdnet_policy_results,
+)
+
+from load_latest_edinet_policy_results import (
+    load_latest_edinet_policy_results,
 )
 
 
@@ -161,6 +169,12 @@ CANDIDATE_HEADERS = [
     "TDnet本文根拠",
     "TDnet本文根拠ページ",
     "TDnet本文Analyzer",
+    "有報本文確認状態",
+    "有報本文判定",
+    "有報本文一致フレーズ",
+    "有報本文根拠",
+    "有報本文根拠ページ",
+    "有報本文Analyzer",
     "TDnet減配警戒",
     "TDnet最新配当開示日",
     "TDnet最新配当分類",
@@ -1120,6 +1134,46 @@ def build_candidate_rows(
                 )
                 or ""
             ),
+            str(
+                record.get(
+                    "edinet_policy_analysis_status",
+                    "",
+                )
+                or ""
+            ),
+            str(
+                record.get(
+                    "edinet_policy_classification",
+                    "",
+                )
+                or ""
+            ),
+            str(
+                record.get(
+                    "edinet_policy_matched_phrase",
+                    "",
+                )
+                or ""
+            ),
+            str(
+                record.get(
+                    "edinet_policy_evidence_text",
+                    "",
+                )
+                or ""
+            ),
+            to_sheet_integer(
+                record.get(
+                    "edinet_policy_evidence_page_number"
+                )
+            ),
+            str(
+                record.get(
+                    "edinet_policy_analyzer_version",
+                    "",
+                )
+                or ""
+            ),
             to_sheet_boolean(
                 record.get(
                     "tdnet_dividend_warning"
@@ -1290,6 +1344,55 @@ def enrich_candidate_records_with_latest_tdnet_policy_results(
 
     print(
         "TDnet PDF本文解析結果を候補へ反映しました。"
+        f"取得件数: {len(policy_results)}, "
+        f"completed: {completed_count}, "
+        f"confirmed: {confirmed_count}"
+    )
+
+    return enriched_records
+
+# ============================================================
+# EDINET有報配当政策本文解析結果
+# ============================================================
+
+def enrich_candidate_records_with_latest_edinet_policy_results(
+    records: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """候補銘柄へPostgreSQL上の最新有報本文解析結果を付与する。"""
+
+    security_codes = [
+        record.get("security_code")
+        for record in records
+    ]
+
+    policy_results = load_latest_edinet_policy_results(
+        security_codes
+    )
+
+    enriched_records = (
+        enrich_candidates_with_edinet_policy_results(
+            records,
+            policy_results,
+        )
+    )
+
+    completed_count = sum(
+        1
+        for record in enriched_records
+        if record.get(
+            "edinet_policy_analysis_status"
+        ) == "completed"
+    )
+    confirmed_count = sum(
+        1
+        for record in enriched_records
+        if record.get(
+            "edinet_policy_classification"
+        ) == "confirmed"
+    )
+
+    print(
+        "EDINET有報配当政策解析結果を候補へ反映しました。"
         f"取得件数: {len(policy_results)}, "
         f"completed: {completed_count}, "
         f"confirmed: {confirmed_count}"
@@ -2654,6 +2757,11 @@ def main() -> None:
     )
     records = (
         enrich_candidate_records_with_latest_tdnet_policy_results(
+            records
+        )
+    )
+    records = (
+        enrich_candidate_records_with_latest_edinet_policy_results(
             records
         )
     )

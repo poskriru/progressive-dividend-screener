@@ -69,6 +69,15 @@ class OutputContractTest(unittest.TestCase):
         "TDnet本文Analyzer",
     ]
 
+    EDINET_POLICY_ANALYSIS_HEADERS = [
+        "有報本文確認状態",
+        "有報本文判定",
+        "有報本文一致フレーズ",
+        "有報本文根拠",
+        "有報本文根拠ページ",
+        "有報本文Analyzer",
+    ]
+
     def test_existing_indicator_columns_are_unchanged_and_new_columns_append(
         self,
     ) -> None:
@@ -108,11 +117,15 @@ class OutputContractTest(unittest.TestCase):
         )
         self.assertEqual(
             CANDIDATE_HEADERS[38:44],
+            self.EDINET_POLICY_ANALYSIS_HEADERS,
+        )
+        self.assertEqual(
+            CANDIDATE_HEADERS[44:50],
             LEGACY_CANDIDATE_HEADERS[28:34],
         )
         self.assertEqual(
             len(CANDIDATE_HEADERS),
-            55,
+            61,
         )
 
     def test_indicator_row_keeps_raw_and_adjusted_history(
@@ -191,7 +204,7 @@ class OutputContractTest(unittest.TestCase):
             [record]
         )[0]
 
-        self.assertEqual(len(row), 55)
+        self.assertEqual(len(row), 61)
         self.assertEqual(row[32], "completed")
         self.assertEqual(row[33], "confirmed")
         self.assertEqual(
@@ -204,6 +217,10 @@ class OutputContractTest(unittest.TestCase):
         )
         self.assertEqual(row[36], 1)
         self.assertEqual(row[37], "v2")
+        self.assertEqual(row[38], "")
+        self.assertEqual(row[39], "")
+        self.assertEqual(row[43], "")
+        self.assertEqual(row[45], "")
 
     def test_candidate_note_identifies_selected_decision(
         self,
@@ -229,19 +246,19 @@ class OutputContractTest(unittest.TestCase):
         )[0]
 
         self.assertEqual(
-            raw_row[43],
+            raw_row[49],
             RAW_DIVIDEND_CAUTION,
         )
         self.assertEqual(
-            raw_row[44],
+            raw_row[50],
             "raw",
         )
         self.assertEqual(
-            adjusted_row[43],
+            adjusted_row[49],
             ADJUSTED_DIVIDEND_NOTE,
         )
         self.assertEqual(
-            adjusted_row[44],
+            adjusted_row[50],
             "adjusted",
         )
 
