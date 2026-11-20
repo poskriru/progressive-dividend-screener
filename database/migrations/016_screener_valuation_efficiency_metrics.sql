@@ -30,7 +30,8 @@ ALTER TABLE screener.annual_financials
 --
 -- スクリーナー基礎VIEWの列は途中に追加されるため、
 -- CREATE OR REPLACEでの列順維持ができない。
--- 依存する統合VIEW・検索キャッシュを先に削除する。
+-- 依存する統合VIEW・検索キャッシュ・基礎VIEW自体を
+-- 一度削除してから作り直す。
 -- ============================================================
 
 DROP MATERIALIZED VIEW
@@ -39,12 +40,15 @@ DROP MATERIALIZED VIEW
 DROP VIEW
     screener.company_screener_with_dividends;
 
+DROP VIEW
+    screener.company_screener_base;
+
 
 -- ============================================================
 -- スクリーナー基礎VIEWの再作成
 -- ============================================================
 
-CREATE OR REPLACE VIEW screener.company_screener_base AS
+CREATE VIEW screener.company_screener_base AS
 
 WITH ranked_prices AS (
     SELECT
