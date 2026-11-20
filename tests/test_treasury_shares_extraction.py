@@ -242,5 +242,56 @@ class TreasurySharesExtractionTests(unittest.TestCase):
         self.assertEqual(result["value"], 12345)
 
 
+class TreasurySharesMigrationClampTests(unittest.TestCase):
+    """自己株式比率クランプのマイグレーション内容を確認する。"""
+
+    def read_migration(self, filename: str) -> str:
+        return (
+            Path(__file__).resolve().parent.parent
+            / "database"
+            / "migrations"
+            / filename
+        ).read_text(encoding="utf-8")
+
+    def test_clamp_condition_appears_in_both_metrics(
+        self,
+    ) -> None:
+        sql = self.read_migration(
+            "017_clamp_treasury_shares_ratio.sql"
+        )
+
+        self.assertEqual(
+            sql.count(
+                "treasury_shares\n                          <= issued_shares"
+            )
+            + sql.count(
+                "AND treasury_shares <= issued_shares"
+            ),
+            2,
+        )
+
+    def test_ratio_falls_back_to_zero(self) -> None:
+        sql = self.read_migration(
+            "017_clamp_treasury_shares_ratio.sql"
+        )
+
+        self.assertIn(
+            "ELSE 0::NUMERIC\n    END AS treasury_shares_ratio_percent",
+            sql,
+        )
+
+    def test_previous_migrations_are_not_modified(
+        self,
+    ) -> None:
+        sql16 = self.read_migration(
+            "016_screener_valuation_efficiency_metrics.sql"
+        )
+
+        self.assertIn(
+            "AND treasury_shares IS NOT NULL\n        THEN treasury_shares::NUMERIC",
+            sql16,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
