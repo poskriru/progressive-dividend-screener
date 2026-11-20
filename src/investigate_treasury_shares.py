@@ -91,7 +91,9 @@ def describe_fact(fact: dict[str, str]) -> str:
 
 def main() -> None:
     api_key = os.environ.get("EDINET_API_KEY", "")
-    raw_doc_ids = os.environ.get("DOC_IDS", "")
+    raw_doc_ids = os.environ.get("DOC_IDS", "") or os.environ.get(
+        "FORCE_DOC_IDS", ""
+    )
 
     doc_ids = [
         doc_id.strip()
