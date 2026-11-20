@@ -76,19 +76,8 @@ jobs:
           pip install -r requirements.txt
 
       # ======================================================
-      # EDINET財務情報取得
+      # 自己株式数抽出の調査（ブランチ版のみ）
       # ======================================================
-      - name: Update EDINET financials
+      - name: Investigate treasury shares
         run: |
-          echo "MAX_DOCUMENTS=${MAX_DOCUMENTS}"
-          echo "FORCE_DOC_IDS=${FORCE_DOC_IDS}"
-          python src/update_edinet_financials.py
-
-      # ======================================================
-      # PostgreSQL版株式指標を本番シートへ出力
-      # ======================================================
-      - name: Export database indicators to production sheet
-        env:
-          INDICATOR_OUTPUT_SHEET_NAME: 株式指標
-        run: |
-          python src/export_database_indicators.py
+          python src/investigate_treasury_shares.py
