@@ -124,8 +124,12 @@ class OutputContractTest(unittest.TestCase):
             LEGACY_CANDIDATE_HEADERS[28:34],
         )
         self.assertEqual(
+            CANDIDATE_HEADERS[61],
+            "候補追加理由",
+        )
+        self.assertEqual(
             len(CANDIDATE_HEADERS),
-            61,
+            62,
         )
 
     def test_indicator_row_keeps_raw_and_adjusted_history(
@@ -204,7 +208,7 @@ class OutputContractTest(unittest.TestCase):
             [record]
         )[0]
 
-        self.assertEqual(len(row), 61)
+        self.assertEqual(len(row), 62)
         self.assertEqual(row[32], "completed")
         self.assertEqual(row[33], "confirmed")
         self.assertEqual(
@@ -221,6 +225,10 @@ class OutputContractTest(unittest.TestCase):
         self.assertEqual(row[39], "")
         self.assertEqual(row[43], "")
         self.assertEqual(row[45], "")
+        self.assertEqual(
+            row[61],
+            "条件適合",
+        )
 
     def test_candidate_note_identifies_selected_decision(
         self,
