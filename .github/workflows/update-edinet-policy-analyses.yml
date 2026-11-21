@@ -1,0 +1,102 @@
+name: EDINET有報配当政策の解析
+
+# ============================================================
+# 実行条件
+# ============================================================
+
+on:
+  # GitHub Actions画面から手動実行できます。
+  workflow_dispatch:
+    inputs:
+      max_policy_docs:
+        description: "1回に解析する有報の最大件数"
+        required: false
+        default: "50"
+
+  # 毎日、日本時間22時に実行します。
+  # UTC 13:00 = 日本時間22:00
+  # TDnet更新（日本時間23:30）より前に完了させ、
+  # 当日の累進配当候補出力に反映させます。
+  schedule:
+    - cron: "0 13 * * *"
+
+
+# ============================================================
+# 権限
+# ============================================================
+
+permissions:
+  contents: read
+
+
+# ============================================================
+# 同時実行制御
+# ============================================================
+
+concurrency:
+  group: update-edinet-policy-analyses
+  cancel-in-progress: false
+
+
+# ============================================================
+# ジョブ
+# ============================================================
+
+jobs:
+  update-edinet-policy-analyses:
+    name: EDINET有報配当政策・PDF本文解析
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    env:
+      TZ: Asia/Tokyo
+
+      DATABASE_URL: >-
+        ${{ secrets.DATABASE_URL }}
+
+      DATABASE_STATEMENT_TIMEOUT_MILLISECONDS: "600000"
+
+      EDINET_API_KEY: >-
+        ${{ secrets.EDINET_API_KEY }}
+
+      MAX_POLICY_DOCS: >-
+        ${{ github.event.inputs.max_policy_docs || '50' }}
+
+    steps:
+
+      # ======================================================
+      # リポジトリ取得
+      # ======================================================
+
+      - name: リポジトリを取得
+        uses: actions/checkout@v7
+
+
+      # ======================================================
+      # Pythonセットアップ
+      # ======================================================
+
+      - name: Pythonをセットアップ
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+
+      # ======================================================
+      # 依存パッケージ
+      # ======================================================
+
+      - name: Pythonパッケージをインストール
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+
+      # ======================================================
+      # EDINET有報配当政策解析
+      # ======================================================
+
+      - name: EDINET有報配当政策を解析
+        run: |
+          python src/update_edinet_policy_analyses.py
