@@ -203,6 +203,7 @@ CANDIDATE_HEADERS = [
     "調整済み累進配当判定状態",
     "5期調整済み配当履歴",
     "候補追加理由",
+    "本文根拠あり",
 ]
 
 CANDIDATE_COLUMN_FORMATS_BY_HEADER: dict[str, str] = {
@@ -1708,6 +1709,10 @@ def build_candidate_rows(
                     CONDITION_MATCHED_REASON,
                 )
                 or CONDITION_MATCHED_REASON
+            ),
+            to_sheet_boolean(
+                record.get("policy_text_evidence")
+                is not None
             ),
         ]
 
