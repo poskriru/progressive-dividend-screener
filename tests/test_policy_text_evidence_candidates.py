@@ -41,6 +41,7 @@ from export_progressive_dividend_candidates import (  # noqa: E402
     annotate_candidates_with_policy_text_evidence,
     apply_policy_text_evidence_columns,
     build_candidate_condition_parameters,
+    build_candidate_rows,
     build_policy_text_evidence_records,
     load_screener_rows_by_security_codes,
 )
@@ -321,6 +322,33 @@ class LoadEvidenceResultsTest(unittest.TestCase):
         )
         self.assertIn("UNION ALL", normalized_query)
         self.assertIn("ROW_NUMBER() OVER", normalized_query)
+
+
+# ============================================================
+# 本文根拠あり列
+# ============================================================
+
+class CandidateEvidenceFlagColumnTest(unittest.TestCase):
+    """候補シート「本文根拠あり」列のテスト。"""
+
+    def test_row_with_evidence_is_flagged(self) -> None:
+        record = {
+            "security_code": "7203",
+            "policy_text_evidence": create_evidence(),
+        }
+
+        row = build_candidate_rows([record])[0]
+
+        self.assertIs(row[62], True)
+
+    def test_row_without_evidence_is_not_flagged(
+        self,
+    ) -> None:
+        record = {"security_code": "7203"}
+
+        row = build_candidate_rows([record])[0]
+
+        self.assertIs(row[62], False)
 
 
 # ============================================================
