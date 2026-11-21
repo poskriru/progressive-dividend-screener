@@ -147,7 +147,7 @@ def select_edinet_policy_targets(
                   AND (
                       documents.document_type_name IS NULL
                       OR documents.document_type_name
-                          NOT LIKE '%訂正%'
+                          NOT LIKE '%%訂正%%'
                   )
                 ORDER BY
                     documents.security_code,
