@@ -123,8 +123,9 @@ CANDIDATE_CRITERIA_DESCRIPTIONS = {
         "候補シートの最大出力件数。1〜5000の整数。"
     ),
     "CANDIDATE_MAX_POLICY_TEXT_ROWS": (
-        "本文根拠（TDnet・有報のconfirmed/manual_review）で"
-        "追加する候補の上限件数。0〜5000の整数。"
+        "本文根拠（TDnet・有報のconfirmed/manual_review）の"
+        "うち定量条件も満たす銘柄を既存候補の後ろへ"
+        "追加する上限件数。0〜5000の整数。"
         "0で本文根拠による追加をしない。"
     ),
 }
@@ -905,17 +906,7 @@ CANDIDATE_SCREENER_COLUMNS = """            security_code,
             adjusted_annual_dividends_yen_5y,
             financial_source_url"""
 
-
-def load_progressive_dividend_candidates(
-    criteria: CandidateCriteria,
-) -> list[dict[str, Any]]:
-    """抽出条件に合う累進配当候補をランキング順で取得する。"""
-
-    query = f"""
-        SELECT
-{CANDIDATE_SCREENER_COLUMNS}
-        FROM screener.company_screener_with_dividends
-        WHERE annual_financial_id IS NOT NULL
+CANDIDATE_CONDITION_SQL = """            annual_financial_id IS NOT NULL
           AND close_price IS NOT NULL
           AND is_adjustment_coverage_complete IS TRUE
           AND is_progressive_dividend_5y_adjusted IS TRUE
@@ -930,7 +921,37 @@ def load_progressive_dividend_candidates(
           AND per_undervaluation_years <= %s
           AND investment_efficiency_10y IS NOT NULL
           AND investment_efficiency_10y >= %s
-          AND (%s = FALSE OR free_cash_flow_jpy > 0)
+          AND (%s = FALSE OR free_cash_flow_jpy > 0)"""
+
+
+def build_candidate_condition_parameters(
+    criteria: CandidateCriteria,
+) -> tuple:
+    """定量条件のプレースホルダー値を抽出条件の順序で返す。"""
+
+    return (
+        criteria.min_dividend_yield_percent,
+        criteria.max_payout_ratio_percent,
+        criteria.max_per_ratio,
+        criteria.max_pbr_ratio,
+        criteria.min_roe_percent,
+        criteria.max_per_discount_years,
+        criteria.min_investment_efficiency,
+        criteria.require_positive_free_cash_flow,
+    )
+
+
+def load_progressive_dividend_candidates(
+    criteria: CandidateCriteria,
+) -> list[dict[str, Any]]:
+    """抽出条件に合う累進配当候補をランキング順で取得する。"""
+
+    query = f"""
+        SELECT
+{CANDIDATE_SCREENER_COLUMNS}
+        FROM screener.company_screener_with_dividends
+        WHERE
+{CANDIDATE_CONDITION_SQL}
         ORDER BY
             dividend_yield_percent DESC NULLS LAST,
             CASE
@@ -944,14 +965,7 @@ def load_progressive_dividend_candidates(
     """
 
     parameters = (
-        criteria.min_dividend_yield_percent,
-        criteria.max_payout_ratio_percent,
-        criteria.max_per_ratio,
-        criteria.max_pbr_ratio,
-        criteria.min_roe_percent,
-        criteria.max_per_discount_years,
-        criteria.min_investment_efficiency,
-        criteria.require_positive_free_cash_flow,
+        *build_candidate_condition_parameters(criteria),
         criteria.max_candidates,
     )
 
@@ -987,8 +1001,9 @@ def load_progressive_dividend_candidates(
 def load_screener_rows_by_security_codes(
     connection,
     security_codes: list[str],
+    criteria: CandidateCriteria,
 ) -> list[dict[str, Any]]:
-    """指定銘柄のスクリーナー指標行を既存接続で読み込む。"""
+    """指定銘柄のうち定量条件を満たす指標行を既存接続で読み込む。"""
 
     if not security_codes:
         return []
@@ -997,14 +1012,19 @@ def load_screener_rows_by_security_codes(
         SELECT
 {CANDIDATE_SCREENER_COLUMNS}
         FROM screener.company_screener_with_dividends
-        WHERE annual_financial_id IS NOT NULL
-          AND close_price IS NOT NULL
-          AND security_code = ANY(%s)
+        WHERE security_code = ANY(%s)
+          AND
+{CANDIDATE_CONDITION_SQL}
         ORDER BY security_code;
     """
 
+    parameters = (
+        security_codes,
+        *build_candidate_condition_parameters(criteria),
+    )
+
     with connection.cursor() as cursor:
-        cursor.execute(query, (security_codes,))
+        cursor.execute(query, parameters)
         rows = [
             dict(row) for row in cursor.fetchall()
         ]
@@ -1098,11 +1118,65 @@ def build_policy_text_evidence_records(
     return appended_records
 
 
+def annotate_candidates_with_policy_text_evidence(
+    records: list[dict[str, Any]],
+    evidence_results: list[Any],
+) -> int:
+    """既存候補のうち本文根拠のある銘柄に
+    追加理由と根拠文書を設定する。
+
+    根拠のある銘柄は定量条件を満たした既存候補であり、
+    理由列で本文根拠を明示する。
+    """
+
+    evidence_by_code: dict[str, Any] = {}
+
+    for evidence in evidence_results:
+        evidence_by_code.setdefault(
+            evidence.security_code,
+            evidence,
+        )
+
+    annotated_count = 0
+
+    for record in records:
+        security_code = str(
+            record.get("security_code")
+        ).strip().upper()
+
+        evidence = evidence_by_code.get(security_code)
+
+        if evidence is None:
+            continue
+
+        reason = (
+            POLICY_TEXT_REASON_BY_CLASSIFICATION.get(
+                evidence.policy_classification
+            )
+        )
+
+        if reason is None:
+            raise RuntimeError(
+                "本文根拠の判定が不正です。"
+                f"証券コード: {security_code}, "
+                f"判定: "
+                f"{evidence.policy_classification}"
+            )
+
+        record["candidate_added_reason"] = reason
+        record["policy_text_evidence"] = evidence
+        annotated_count += 1
+
+    return annotated_count
+
+
 def append_policy_text_evidence_candidates(
     records: list[dict[str, Any]],
     criteria: CandidateCriteria,
 ) -> list[dict[str, Any]]:
-    """本文根拠（confirmed/manual_review）のある銘柄を候補へ追加する。"""
+    """本文根拠（confirmed/manual_review）のある銘柄のうち
+    定量条件も満たす銘柄を候補へ追加する。
+    """
 
     if criteria.max_policy_text_candidates <= 0:
         print(
@@ -1123,6 +1197,13 @@ def append_policy_text_evidence_candidates(
         )
         return records
 
+    annotated_count = (
+        annotate_candidates_with_policy_text_evidence(
+            records,
+            evidence_results,
+        )
+    )
+
     existing_security_codes = {
         str(record.get("security_code"))
         .strip()
@@ -1141,7 +1222,8 @@ def append_policy_text_evidence_candidates(
         print(
             "本文根拠のある銘柄は"
             "すべて既存候補に含まれています。"
-            f"本文根拠銘柄数: {len(evidence_results):,}"
+            f"本文根拠銘柄数: {len(evidence_results):,}, "
+            f"既存候補への根拠設定数: {annotated_count:,}"
         )
         return records
 
@@ -1152,6 +1234,7 @@ def append_policy_text_evidence_candidates(
             load_screener_rows_by_security_codes(
                 connection,
                 evidence_security_codes,
+                criteria,
             )
         )
 
@@ -1180,7 +1263,8 @@ def append_policy_text_evidence_candidates(
     print(
         "本文根拠の銘柄を累進配当候補へ追加しました。"
         f"追加件数: {len(appended_records):,}, "
-        f"指標未整備または上限切れ: "
+        f"既存候補への根拠設定数: {annotated_count:,}, "
+        f"定量条件不合否・指標未整備・上限切れ: "
         f"{missing_screener_row_count:,}"
     )
 
