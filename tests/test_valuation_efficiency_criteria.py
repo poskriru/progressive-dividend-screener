@@ -61,6 +61,7 @@ class ValuationEfficiencyCriteriaTests(unittest.TestCase):
                 "CANDIDATE_MIN_INVESTMENT_EFFICIENCY": "1.7",
                 "CANDIDATE_REQUIRE_POSITIVE_FREE_CASH_FLOW": "true",
                 "CANDIDATE_MAX_ROWS": "300",
+                "CANDIDATE_MAX_POLICY_TEXT_ROWS": "100",
             }
         )
 
