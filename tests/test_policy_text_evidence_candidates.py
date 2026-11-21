@@ -34,11 +34,15 @@ if str(SOURCE_DIRECTORY) not in sys.path:
 # ============================================================
 
 from export_progressive_dividend_candidates import (  # noqa: E402
+    CANDIDATE_CONDITION_SQL,
     CONDITION_MATCHED_REASON,
     POLICY_TEXT_REASON_BY_CLASSIFICATION,
     CandidateCriteria,
+    annotate_candidates_with_policy_text_evidence,
     apply_policy_text_evidence_columns,
+    build_candidate_condition_parameters,
     build_policy_text_evidence_records,
+    load_screener_rows_by_security_codes,
 )
 from load_policy_text_evidence_results import (  # noqa: E402
     PolicyTextEvidenceResult,
@@ -320,6 +324,81 @@ class LoadEvidenceResultsTest(unittest.TestCase):
 
 
 # ============================================================
+# 指標行読込
+# ============================================================
+
+def create_criteria() -> CandidateCriteria:
+    """テスト用の抽出条件を作成する。"""
+
+    return CandidateCriteria(
+        min_dividend_yield_percent=Decimal("3"),
+        max_payout_ratio_percent=Decimal("70"),
+        max_per_ratio=Decimal("25"),
+        max_pbr_ratio=Decimal("3"),
+        min_roe_percent=Decimal("8"),
+        max_per_discount_years=Decimal("5.5"),
+        min_investment_efficiency=Decimal("1.7"),
+        require_positive_free_cash_flow=True,
+        max_candidates=300,
+    )
+
+
+class LoadScreenerRowsByCodesTest(unittest.TestCase):
+    """本文根拠銘柄の指標行読込テスト。"""
+
+    def test_applies_same_quantitative_conditions(
+        self,
+    ) -> None:
+        connection, cursor = create_connection([])
+
+        load_screener_rows_by_security_codes(
+            connection,
+            ["7203"],
+            create_criteria(),
+        )
+
+        query = " ".join(
+            cursor.execute.call_args.args[0].split()
+        )
+
+        self.assertIn(
+            "security_code = ANY(%s)",
+            query,
+        )
+        self.assertIn(
+            "is_progressive_dividend_5y_adjusted IS TRUE",
+            query,
+        )
+        self.assertIn(
+            "dividend_yield_percent >= %s",
+            query,
+        )
+        self.assertIn(
+            "payout_ratio_percent BETWEEN 0 AND %s",
+            query,
+        )
+
+        parameters = cursor.execute.call_args.args[1]
+
+        self.assertEqual(parameters[0], ["7203"])
+        self.assertEqual(
+            parameters[1:],
+            build_candidate_condition_parameters(
+                create_criteria()
+            ),
+        )
+
+    def test_returns_empty_list_without_codes(self) -> None:
+        rows = load_screener_rows_by_security_codes(
+            MagicMock(),
+            [],
+            create_criteria(),
+        )
+
+        self.assertEqual(rows, [])
+
+
+# ============================================================
 # 候補レコード変換
 # ============================================================
 
@@ -424,6 +503,72 @@ class BuildEvidenceRecordsTest(unittest.TestCase):
             ],
             "本文根拠（manual_review）",
         )
+
+
+# ============================================================
+# 既存候補への根拠設定
+# ============================================================
+
+class AnnotateCandidatesTest(unittest.TestCase):
+    """既存候補の本文根拠アノテーションテスト。"""
+
+    def test_annotates_candidate_with_evidence(self) -> None:
+        evidence = create_evidence()
+        record = {"security_code": "7203"}
+
+        annotated_count = (
+            annotate_candidates_with_policy_text_evidence(
+                [record],
+                [evidence],
+            )
+        )
+
+        self.assertEqual(annotated_count, 1)
+        self.assertEqual(
+            record["candidate_added_reason"],
+            "本文根拠（confirmed）",
+        )
+        self.assertEqual(
+            record["policy_text_evidence"],
+            evidence,
+        )
+
+    def test_ignores_candidates_without_evidence(self) -> None:
+        record = {
+            "security_code": "7203",
+            "candidate_added_reason": (
+                CONDITION_MATCHED_REASON
+            ),
+        }
+
+        annotated_count = (
+            annotate_candidates_with_policy_text_evidence(
+                [record],
+                [create_evidence(security_code="5706")],
+            )
+        )
+
+        self.assertEqual(annotated_count, 0)
+        self.assertEqual(
+            record["candidate_added_reason"],
+            CONDITION_MATCHED_REASON,
+        )
+        self.assertNotIn(
+            "policy_text_evidence",
+            record,
+        )
+
+    def test_invalid_classification_is_rejected(self) -> None:
+        evidence = create_evidence(
+            policy_classification="not_confirmed"
+        )
+        record = {"security_code": "7203"}
+
+        with self.assertRaises(RuntimeError):
+            annotate_candidates_with_policy_text_evidence(
+                [record],
+                [evidence],
+            )
 
 
 # ============================================================
