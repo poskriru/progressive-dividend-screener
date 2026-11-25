@@ -221,11 +221,30 @@ def evaluate_tdnet_incomplete_analyses(
         return (
             f"{WARNING_PREFIX} TDnet未完了解析: "
             f"{count:,}件"
-            "（pending/fetch_failed/text_extraction_failed）"
+            "（pending/fetch_failed）"
         )
 
     return (
         f"{OK_PREFIX} TDnet未完了解析: 0件"
+    )
+
+
+def evaluate_tdnet_text_extraction_failures(
+    failed_count: Any,
+) -> str:
+    """TDnet PDFの本文抽出不可件数を評価する。"""
+
+    count = int(failed_count or 0)
+
+    if count > 0:
+        return (
+            f"{OK_PREFIX} TDnet本文抽出不可: "
+            f"{count:,}件"
+            "（画像PDF等。本文根拠なしとして扱う）"
+        )
+
+    return (
+        f"{OK_PREFIX} TDnet本文抽出不可: 0件"
     )
 
 
@@ -388,7 +407,16 @@ def load_health_metrics() -> dict[str, Any]:
             """
             SELECT COUNT(*)
             FROM screener.tdnet_policy_pdf_analyses
-            WHERE analysis_status <> 'completed'
+            WHERE analysis_status
+                IN ('pending', 'fetch_failed')
+            """
+        ),
+        "tdnet_text_extraction_failed_count": (
+            """
+            SELECT COUNT(*)
+            FROM screener.tdnet_policy_pdf_analyses
+            WHERE analysis_status
+                = 'text_extraction_failed'
             """
         ),
         "unsupported_action_count": (
@@ -478,6 +506,11 @@ def build_health_report(
         ),
         evaluate_tdnet_incomplete_analyses(
             metrics.get("tdnet_incomplete_analysis_count")
+        ),
+        evaluate_tdnet_text_extraction_failures(
+            metrics.get(
+                "tdnet_text_extraction_failed_count"
+            )
         ),
         (
             f"{OK_PREFIX} 有効銘柄数: "

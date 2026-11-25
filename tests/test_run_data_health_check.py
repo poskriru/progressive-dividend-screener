@@ -41,6 +41,7 @@ from run_data_health_check import (  # noqa: E402
     evaluate_age_check,
     evaluate_cache_consistency,
     evaluate_tdnet_incomplete_analyses,
+    evaluate_tdnet_text_extraction_failures,
     evaluate_unsupported_actions,
     get_positive_age_days,
     get_single_column_value,
@@ -134,9 +135,9 @@ class LoadHealthMetricsTests(unittest.TestCase):
         ):
             metrics = load_health_metrics()
 
-        self.assertEqual(len(metrics), 11)
+        self.assertEqual(len(metrics), 12)
         self.assertEqual(metrics["active_security_count"], 1)
-        self.assertEqual(metrics["unsupported_action_count"], 11)
+        self.assertEqual(metrics["unsupported_action_count"], 12)
 
 
 # ============================================================
@@ -382,10 +383,45 @@ class TdnetIncompleteAnalysisTests(unittest.TestCase):
             line.startswith(WARNING_PREFIX)
         )
         self.assertIn("4件", line)
+        self.assertIn("pending/fetch_failed", line)
 
     def test_missing_count_is_ok(self) -> None:
         line = evaluate_tdnet_incomplete_analyses(
             None
+        )
+
+        self.assertTrue(line.startswith(OK_PREFIX))
+
+
+# ============================================================
+# TDnet本文抽出不可
+# ============================================================
+
+class TdnetTextExtractionFailureTests(unittest.TestCase):
+    """TDnet本文抽出不可の表示を確認する。"""
+
+    def test_zero_count_is_ok(self) -> None:
+        line = (
+            evaluate_tdnet_text_extraction_failures(0)
+        )
+
+        self.assertTrue(line.startswith(OK_PREFIX))
+        self.assertIn("0件", line)
+
+    def test_positive_count_is_ok(self) -> None:
+        line = (
+            evaluate_tdnet_text_extraction_failures(3)
+        )
+
+        self.assertTrue(line.startswith(OK_PREFIX))
+        self.assertIn("3件", line)
+        self.assertIn("画像PDF等", line)
+
+    def test_missing_count_is_ok(self) -> None:
+        line = (
+            evaluate_tdnet_text_extraction_failures(
+                None
+            )
         )
 
         self.assertTrue(line.startswith(OK_PREFIX))
@@ -431,6 +467,7 @@ class BuildReportTests(unittest.TestCase):
                 23,
             ),
             "tdnet_incomplete_analysis_count": 0,
+            "tdnet_text_extraction_failed_count": 1,
         }
 
     def test_healthy_metrics_have_no_warnings(self) -> None:
@@ -452,7 +489,7 @@ class BuildReportTests(unittest.TestCase):
         )
 
         self.assertFalse(has_warnings)
-        self.assertEqual(len(lines), 12)
+        self.assertEqual(len(lines), 13)
 
     def test_stale_price_causes_warning(self) -> None:
         metrics = self.build_metrics()
